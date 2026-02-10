@@ -43,9 +43,9 @@ ln -s oape-ai-e2e ~/.cursor/commands/oape-ai-e2e
 
 ## Available Plugins
 
-| Plugin                    | Description                                    | Commands             |
-| ------------------------- | ---------------------------------------------- | -------------------- |
-| **[oape](plugins/oape/)** | AI-driven OpenShift operator development tools | `/oape:api-generate` |
+| Plugin                    | Description                                    | Commands                                     |
+| ------------------------- | ---------------------------------------------- | -------------------------------------------- |
+| **[oape](plugins/oape/)** | AI-driven OpenShift operator development tools | `/oape:api-generate`, `/oape:api-implement`  |
 
 ## Commands
 
@@ -55,6 +55,23 @@ Reads an OpenShift enhancement proposal PR, extracts the required API changes, a
 
 ```shell
 /oape:api-generate https://github.com/openshift/enhancements/pull/1234
+```
+
+### `/oape:api-implement` -- Generate Controller Implementation from Enhancement Proposal
+
+Reads an OpenShift enhancement proposal PR, extracts the required implementation logic, and generates complete controller/reconciler code following controller-runtime and operator-sdk conventions.
+
+```shell
+/oape:api-implement https://github.com/openshift/enhancements/pull/1234
+```
+
+**Typical workflow:**
+```shell
+# Step 1: Generate API types
+/oape:api-generate https://github.com/openshift/enhancements/pull/1234
+
+# Step 2: Generate controller implementation
+/oape:api-implement https://github.com/openshift/enhancements/pull/1234
 ```
 
 ### Adding a New Command
