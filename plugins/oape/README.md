@@ -32,7 +32,7 @@ Reads an OpenShift enhancement proposal PR, extracts the required implementation
 ```
 
 **What it does:**
-1. **Prechecks** -- Validates the PR URL, required tools (`gh`, `go`, `git`, `make`), GitHub authentication, repository type (must be an operator with controller-runtime), and PR accessibility.
+1. **Prechecks** -- Validates the PR URL, required tools (`gh`, `go`, `git`, `make`), GitHub authentication, repository type (controller-runtime or library-go), and PR accessibility.
 2. **Knowledge Refresh** -- Fetches and internalizes the latest controller-runtime patterns and operator best practices.
 3. **Enhancement Analysis** -- Reads the enhancement proposal to extract business logic requirements, reconciliation workflow, conditions, events, and error handling.
 4. **Pattern Detection** -- Identifies the controller layout pattern used in the repository.
