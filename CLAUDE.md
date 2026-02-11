@@ -89,19 +89,6 @@ The commands automatically detect which framework the repository uses:
 
 ## Project Structure
 
-```
-oape-ai-e2e/
-├── plugins/oape/
-│   ├── commands/
-│   │   ├── api-generate.md      # Generate API types
-│   │   └── api-implement.md     # Generate controller code
-│   ├── skills/
-│   │   └── effective-go/        # Go best practices
-│   │       └── SKILL.md
-│   └── README.md
-├── CLAUDE.md                     # This file
-└── README.md
-```
 
 ---
 
