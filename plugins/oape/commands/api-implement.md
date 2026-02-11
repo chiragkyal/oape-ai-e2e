@@ -203,16 +203,6 @@ fi
 if grep -q "sigs.k8s.io/controller-runtime" "$REPO_ROOT/go.mod"; then
   echo "Found: sigs.k8s.io/controller-runtime"
 fi
-
-# Check for operator-sdk
-if grep -q "github.com/operator-framework/operator-sdk" "$REPO_ROOT/go.mod"; then
-  echo "Found: github.com/operator-framework/operator-sdk"
-fi
-
-# Check for client-go only (indicates library-go style)
-if grep -q "k8s.io/client-go" "$REPO_ROOT/go.mod"; then
-  echo "Found: k8s.io/client-go"
-fi
 ```
 
 ```thinking
@@ -225,14 +215,7 @@ Indicators:
 - Uses `ctrl.Manager`, `Reconciler` pattern
 - File structure: `controllers/` or `internal/controller/`
 
-**Type 2: operator-sdk legacy (v0.x)**
-Indicators:
-- Has `github.com/operator-framework/operator-sdk` in go.mod
-- Uses `pkg/controller/` structure
-- Has `add_<resource>.go` files
-- Uses older `reconcile.Reconciler` interface
-
-**Type 3: library-go based (OpenShift core operators)**
+**Type 2: library-go based (OpenShift core operators)**
 Indicators:
 - Has `github.com/openshift/library-go` in go.mod
 - Uses `pkg/operator/` structure
@@ -240,17 +223,11 @@ Indicators:
 - Has `starter.go` for controller registration
 - More imperative style, less declarative
 
-**Type 4: Pure client-go (custom/legacy)**
-Indicators:
-- Only has `k8s.io/client-go`
-- No controller-runtime or library-go
-- Custom controller loop implementation
-
 I will set OPERATOR_TYPE to one of:
 - "controller-runtime" (most common, default)
 - "library-go" (OpenShift core operators)
-- "operator-sdk-legacy" (older operator-sdk)
-- "client-go" (pure client-go)
+
+If neither framework is detected, STOP and ask user for clarification.
 
 The generated code patterns will differ based on this type.
 ```
@@ -267,13 +244,9 @@ Apply these rules in order:
    - OPERATOR_TYPE = "controller-runtime"
    - Use Reconciler pattern, ctrl.Manager
 
-3. **Else if `github.com/operator-framework/operator-sdk` is in go.mod AND `pkg/controller/add_*.go` exists:**
-   - OPERATOR_TYPE = "operator-sdk-legacy"
-   - Use older reconcile.Reconciler pattern
-
-4. **Else:**
-   - OPERATOR_TYPE = "client-go"
-   - STOP and ask user for clarification on controller pattern
+3. **Else:**
+   - STOP and ask user for clarification
+   - Only controller-runtime and library-go frameworks are supported
 
 ---
 
@@ -1162,7 +1135,7 @@ After generating all files, provide a comprehensive summary:
 
 Enhancement PR: <url>
 Enhancement Title: <title>
-Operator Type: <controller-runtime | library-go | operator-sdk-legacy>
+Operator Type: <controller-runtime | library-go>
 
 Generated Files:
   - <path/to/controller.go> — Main controller implementation
@@ -1243,7 +1216,7 @@ The command MUST FAIL and STOP immediately if ANY of the following are true:
 6. **PR not accessible**: Enhancement PR cannot be fetched
 7. **No implementation requirements**: EP doesn't describe controller behavior
 8. **Ambiguous requirements**: Cannot determine reconciliation workflow
-9. **Unknown operator type**: Cannot determine controller-runtime vs library-go vs other
+9. **Unsupported framework**: Repository does not use controller-runtime or library-go
 
 ## Behavioral Rules
 
