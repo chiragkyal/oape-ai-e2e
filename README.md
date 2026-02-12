@@ -43,9 +43,9 @@ ln -s oape-ai-e2e ~/.cursor/commands/oape-ai-e2e
 
 ## Available Plugins
 
-| Plugin                    | Description                                    | Commands                                     |
-| ------------------------- | ---------------------------------------------- | -------------------------------------------- |
-| **[oape](plugins/oape/)** | AI-driven OpenShift operator development tools | `/oape:api-generate`, `/oape:api-implement`  |
+| Plugin                    | Description                                    | Commands                                                                    |
+| ------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------- |
+| **[oape](plugins/oape/)** | AI-driven OpenShift operator development tools | `/oape:api-generate`, `/oape:api-generate-tests`, `/oape:api-implement` |
 
 ## Commands
 
@@ -55,6 +55,14 @@ Reads an OpenShift enhancement proposal PR, extracts the required API changes, a
 
 ```shell
 /oape:api-generate https://github.com/openshift/enhancements/pull/1234
+```
+
+### `/oape:api-generate-tests` -- Generate Integration Tests for API Types
+
+Generates `.testsuite.yaml` integration test files for OpenShift API type definitions, covering create, update, validation, and error scenarios.
+
+```shell
+/oape:api-generate-tests api/v1alpha1/myresource_types.go
 ```
 
 ### `/oape:api-implement` -- Generate Controller Implementation from Enhancement Proposal
@@ -70,7 +78,10 @@ Reads an OpenShift enhancement proposal PR, extracts the required implementation
 # Step 1: Generate API types
 /oape:api-generate https://github.com/openshift/enhancements/pull/1234
 
-# Step 2: Generate controller implementation
+# Step 2: Generate integration tests
+/oape:api-generate-tests api/v1alpha1/
+
+# Step 3: Generate controller implementation
 /oape:api-implement https://github.com/openshift/enhancements/pull/1234
 ```
 
