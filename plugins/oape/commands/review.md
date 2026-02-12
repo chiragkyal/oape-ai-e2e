@@ -7,7 +7,7 @@ argument-hint: <ticket_id> [base_ref]
 oape:review
 
 ## Synopsis
-```
+```shell
 /oape:review <ticket_id> [base_ref]
 ```
 
@@ -133,16 +133,16 @@ When issues are present, the fixes are applied automatically and a fix summary i
 ## Examples
 
 1. **Review changes against origin/master**:
-   ```
+   ```shell
    /oape:review OCPBUGS-12345
    ```
 
 2. **Review changes against a specific branch**:
-   ```
+   ```shell
    /oape:review OCPBUGS-12345 origin/release-4.15
    ```
 
 3. **Review changes against a specific commit**:
-   ```
+   ```shell
    /oape:review OCPBUGS-12345 abc123def
    ```
