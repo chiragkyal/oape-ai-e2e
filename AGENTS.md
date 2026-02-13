@@ -6,16 +6,18 @@ This document provides context for AI agents when working with the OAPE AI E2E F
 
 This project provides AI-driven tools for end-to-end feature development in OpenShift operators. The workflow takes an Enhancement Proposal (EP) and generates:
 1. API type definitions (Go structs)
-2. Controller/reconciler implementation code
+2. Integration tests for the API types
+3. Controller/reconciler implementation code
 
 ## Commands
 
-| Command | Purpose |
-|---------|---------|
-| `/oape:api-generate <EP-URL>` | Generate Go API types from Enhancement Proposal |
-| `/oape:api-implement <EP-URL>` | Generate controller code from Enhancement Proposal + API types |
-| `/oape:review <ticket_id> [base_ref]` | Production-grade code review against Jira requirements |
-| `/oape:implement-review-fixes <report>` | Automatically apply fixes from a review report |
+| Command                                   | Purpose                                                        |
+| ----------------------------------------- | -------------------------------------------------------------- |
+| `/oape:api-generate <EP-URL>`             | Generate Go API types from Enhancement Proposal                |
+| `/oape:api-generate-tests <path>`         | Generate integration test suites for API types                 |
+| `/oape:api-implement <EP-URL>`            | Generate controller code from Enhancement Proposal + API types |
+| `/oape:review <ticket_id> [base_ref]`     | Production-grade code review against Jira requirements         |
+| `/oape:implement-review-fixes <report>`   | Automatically apply fixes from a review report                 |
 
 ## Typical Workflow
 
@@ -23,13 +25,16 @@ This project provides AI-driven tools for end-to-end feature development in Open
 # 1. Navigate to an operator repository
 cd /path/to/operator-repo
 
-# 2. Generate API types first
+# 2. Generate API types
 /oape:api-generate https://github.com/openshift/enhancements/pull/XXXX
 
-# 3. Generate controller implementation
+# 3. Generate integration tests for the API types
+/oape:api-generate-tests api/v1alpha1/
+
+# 4. Generate controller implementation
 /oape:api-implement https://github.com/openshift/enhancements/pull/XXXX
 
-# 4. Build and verify
+# 5. Build and verify
 make generate && make manifests && make build && make test
 ```
 
@@ -41,25 +46,25 @@ These repositories can be used to test the OAPE commands. Clone any of them and 
 
 ### Cert-Manager Operators
 
-| Repository | Description | Framework |
-|------------|-------------|-----------|
-| [openshift/cert-manager-operator](https://github.com/openshift/cert-manager-operator) | Manages cert-manager installation on OpenShift | controller-runtime |
-| [openshift/jetstack-cert-manager](https://github.com/openshift/jetstack-cert-manager) | Core cert-manager (upstream fork) | controller-runtime |
-| [openshift/cert-manager-istio-csr](https://github.com/openshift/cert-manager-istio-csr) | Certificate signing for Istio service mesh | controller-runtime |
+| Repository                                                                              | Description                                    | Framework          |
+| --------------------------------------------------------------------------------------- | ---------------------------------------------- | ------------------ |
+| [openshift/cert-manager-operator](https://github.com/openshift/cert-manager-operator)   | Manages cert-manager installation on OpenShift | controller-runtime |
+| [openshift/jetstack-cert-manager](https://github.com/openshift/jetstack-cert-manager)   | Core cert-manager (upstream fork)              | controller-runtime |
+| [openshift/cert-manager-istio-csr](https://github.com/openshift/cert-manager-istio-csr) | Certificate signing for Istio service mesh     | controller-runtime |
 
 ### External Secrets Operators
 
-| Repository | Description | Framework |
-|------------|-------------|-----------|
+| Repository                                                                                    | Description                           | Framework          |
+| --------------------------------------------------------------------------------------------- | ------------------------------------- | ------------------ |
 | [openshift/external-secrets-operator](https://github.com/openshift/external-secrets-operator) | Manages external-secrets on OpenShift | controller-runtime |
-| [openshift/external-secrets](https://github.com/openshift/external-secrets) | Core external-secrets (upstream fork) | controller-runtime |
+| [openshift/external-secrets](https://github.com/openshift/external-secrets)                   | Core external-secrets (upstream fork) | controller-runtime |
 
 ### Additional Test Repositories
 
-| Repository | Description | Framework |
-|------------|-------------|-----------|
-| [openshift/cluster-ingress-operator](https://github.com/openshift/cluster-ingress-operator) | Good example of controller-runtime patterns | controller-runtime |
-| [openshift/cluster-authentication-operator](https://github.com/openshift/cluster-authentication-operator) | Good example of library-go patterns | library-go |
+| Repository                                                                                                | Description                                 | Framework          |
+| --------------------------------------------------------------------------------------------------------- | ------------------------------------------- | ------------------ |
+| [openshift/cluster-ingress-operator](https://github.com/openshift/cluster-ingress-operator)               | Good example of controller-runtime patterns | controller-runtime |
+| [openshift/cluster-authentication-operator](https://github.com/openshift/cluster-authentication-operator) | Good example of library-go patterns         | library-go         |
 
 ---
 
@@ -82,23 +87,16 @@ git clone --filter=blob:none https://github.com/openshift/external-secrets.git
 
 The commands automatically detect which framework the repository uses:
 
-| Framework | Detection | Code Pattern |
-|-----------|-----------|--------------|
-| **controller-runtime** | `sigs.k8s.io/controller-runtime` in go.mod | `Reconcile(ctx, req) (Result, error)` |
-| **library-go** | `github.com/openshift/library-go` in go.mod | `sync(ctx, syncCtx) error` |
+| Framework              | Detection                                   | Code Pattern                          |
+| ---------------------- | ------------------------------------------- | ------------------------------------- |
+| **controller-runtime** | `sigs.k8s.io/controller-runtime` in go.mod  | `Reconcile(ctx, req) (Result, error)` |
+| **library-go**         | `github.com/openshift/library-go` in go.mod | `sync(ctx, syncCtx) error`            |
 
 ---
 
 ## Project Structure
 
 
----
-
-## Skills
-
-| Skill | Purpose |
-|-------|---------|
-| `effective-go` | Ensures generated Go code follows official best practices |
 
 ---
 
@@ -126,7 +124,7 @@ When generating code, these conventions are followed:
 
 ## Important Notes
 
-- Always run `/oape:api-generate` before `/oape:api-implement`
+- Always run `/oape:api-generate` before `/oape:api-generate-tests` or `/oape:api-implement`
 - The commands READ existing code patterns and replicate them
 - Generated code follows the repository's existing style
-- API types are NOT modified by `api-implement` (only reads them)
+- API types are NOT modified by `api-generate-tests` or `api-implement` (they only read them)

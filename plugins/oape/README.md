@@ -20,7 +20,20 @@ Reads an OpenShift enhancement proposal PR, extracts the required API changes, a
 4. **Code Generation** -- Generates or modifies Go type definitions following conventions derived from the authoritative documents and patterns from the existing codebase.
 5. **FeatureGate Registration** -- Adds FeatureGate to `features.go` when applicable.
 
----
+### `/oape:api-generate-tests`
+
+Generates `.testsuite.yaml` integration test files for OpenShift API type definitions. Reads Go types, CRD manifests, and validation markers to produce comprehensive test suites.
+
+**Usage:**
+```shell
+/oape:api-generate-tests api/v1alpha1/myresource_types.go
+```
+
+**What it does:**
+1. **Prechecks** -- Verifies the repository, identifies target API types, and checks for CRD manifests.
+2. **Type Analysis** -- Reads Go types to extract fields, validation markers, enums, unions, immutability rules, and feature gates.
+3. **Test Generation** -- Generates test cases covering: minimal valid create, valid/invalid field values, update scenarios, immutable fields, singleton name validation, discriminated unions, feature-gated fields, and status subresource tests.
+4. **File Output** -- Writes `.testsuite.yaml` files following the repo's existing naming and directory conventions.
 
 ### `/oape:api-implement`
 
@@ -43,6 +56,9 @@ Reads an OpenShift enhancement proposal PR, extracts the required implementation
 ```shell
 # First, generate the API types
 /oape:api-generate https://github.com/openshift/enhancements/pull/1234
+
+# Then, generate integration tests for the new types
+/oape:api-generate-tests api/v1alpha1/myresource_types.go
 
 # Then, generate the controller implementation
 /oape:api-implement https://github.com/openshift/enhancements/pull/1234
