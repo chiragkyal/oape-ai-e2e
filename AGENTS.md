@@ -13,6 +13,7 @@ This project provides AI-driven tools for end-to-end feature development in Open
 
 | Command                                   | Purpose                                                        |
 | ----------------------------------------- | -------------------------------------------------------------- |
+| `/oape:init <repo-short-name>`            | Clone an allowed operator repo by short name                   |
 | `/oape:api-generate <EP-URL>`             | Generate Go API types from Enhancement Proposal                |
 | `/oape:api-generate-tests <path>`         | Generate integration test suites for API types                 |
 | `/oape:api-implement <EP-URL>`            | Generate controller code from Enhancement Proposal + API types |
@@ -22,8 +23,8 @@ This project provides AI-driven tools for end-to-end feature development in Open
 ## Typical Workflow
 
 ```bash
-# 1. Navigate to an operator repository
-cd /path/to/operator-repo
+# 1. Clone an operator repository (if not already cloned)
+/oape:init cert-manager-operator
 
 # 2. Generate API types
 /oape:api-generate https://github.com/openshift/enhancements/pull/XXXX
