@@ -4,6 +4,21 @@ AI-driven OpenShift operator development tools, following OpenShift and Kubernet
 
 ## Commands
 
+### `/oape:init`
+
+Clones an allowed OpenShift operator repository by short name into the current directory so that subsequent `/oape:*` commands can operate immediately.
+
+**Usage:**
+```shell
+/oape:init cert-manager-operator
+```
+
+**What it does:**
+1. **Prechecks** -- Validates the short name argument, required tools (`git`, `gh`), and GitHub authentication.
+2. **Repository Resolution** -- Matches the short name against the allowlist (case-insensitive, with partial match disambiguation).
+3. **Clone** -- Runs `git clone --filter=blob:none` into the current working directory. If the directory already exists with the correct remote, reuses it.
+4. **Verify** -- Changes into the cloned directory and reports the Go module and detected framework.
+
 ### `/oape:api-generate`
 
 Reads an OpenShift enhancement proposal PR, extracts the required API changes, and generates compliant Go type definitions in the correct paths of the current OpenShift operator repository.
@@ -54,13 +69,16 @@ Reads an OpenShift enhancement proposal PR, extracts the required implementation
 
 **Typical Workflow:**
 ```shell
-# First, generate the API types
+# Clone the operator repository (if not already cloned)
+/oape:init cert-manager-operator
+
+# Generate the API types
 /oape:api-generate https://github.com/openshift/enhancements/pull/1234
 
-# Then, generate integration tests for the new types
+# Generate integration tests for the new types
 /oape:api-generate-tests api/v1alpha1/myresource_types.go
 
-# Then, generate the controller implementation
+# Generate the controller implementation
 /oape:api-implement https://github.com/openshift/enhancements/pull/1234
 ```
 

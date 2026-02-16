@@ -1,0 +1,6 @@
+product,role,repo_url,base_branch
+cert-manager Operator for Red Hat OpenShift,upstream operand fork,https://github.com/openshift/jetstack-cert-manager.git,ai-staging-release-1.18
+cert-manager Operator for Red Hat OpenShift,product downstream operator,https://github.com/openshift/cert-manager-operator.git,ai-staging
+cert-manager Operator for Red Hat OpenShift,istio integration,https://github.com/openshift/cert-manager-istio-csr.git,main
+External Secrets Operator for Red Hat OpenShift,upstream fork,https://github.com/openshift/external-secrets-operator.git,ai-staging-release-1.1
+External Secrets Operator for Red Hat OpenShift,product downstream operator,https://github.com/openshift/external-secrets-operator.git,duplicate-dest-ai-staging
