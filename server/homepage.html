@@ -13,9 +13,9 @@
   h1 { font-size: 1.4rem; margin-bottom: 4px; }
   p.sub { color: #666; font-size: .9rem; margin-bottom: 24px; }
   label { display: block; font-weight: 600; margin-bottom: 6px; font-size: .9rem; }
-  input[type=text], select { width: 100%; padding: 10px 12px; border: 1px solid #ccc;
+  input[type=text] { width: 100%; padding: 10px 12px; border: 1px solid #ccc;
                    border-radius: 6px; font-size: .95rem; }
-  input[type=text]:focus, select:focus { outline: none; border-color: #4a90d9; }
+  input[type=text]:focus { outline: none; border-color: #4a90d9; }
   button { margin-top: 16px; padding: 10px 24px; background: #4a90d9; color: #fff;
            border: none; border-radius: 6px; font-size: .95rem; cursor: pointer; }
   button:disabled { background: #aaa; cursor: not-allowed; }
@@ -25,6 +25,20 @@
              vertical-align: middle; margin-right: 8px; }
   @keyframes spin { to { transform: rotate(360deg); } }
   #status { margin-top: 20px; font-size: .9rem; color: #555; }
+
+  /* Workflow phase tracker */
+  .phases { margin-top: 16px; display: none; }
+  .phase { display: flex; align-items: center; gap: 8px; padding: 6px 0;
+           font-size: .85rem; color: #999; }
+  .phase.active { color: #4a90d9; font-weight: 600; }
+  .phase.done { color: #2E7D32; }
+  .phase.failed { color: #c0392b; }
+  .phase-icon { width: 20px; text-align: center; flex-shrink: 0; }
+  .phase.active .phase-icon::after { content: '\25B6'; }
+  .phase.done .phase-icon::after { content: '\2713'; }
+  .phase.failed .phase-icon::after { content: '\2717'; }
+  .phase:not(.active):not(.done):not(.failed) .phase-icon::after { content: '\25CB'; }
+
   #conversation { margin-top: 16px; background: #fafafa; border: 1px solid #e0e0e0;
                   border-radius: 6px; max-height: 500px; overflow-y: auto;
                   display: none; }
@@ -53,20 +67,40 @@
 <body>
 <div class="card">
   <h1>OAPE Operator Feature Developer</h1>
-  <p class="sub">Generate controller code from an OpenShift Enhancement Proposal</p>
+  <p class="sub">Full workflow: API types, controller, and E2E tests from an Enhancement Proposal</p>
   <form id="epForm">
-    <label for="command">Command</label>
-    <select id="command" name="command">
-      <option value="api-implement" selected>api-implement</option>
-    </select>
-    <label for="ep_url" style="margin-top:14px">Enhancement Proposal PR URL</label>
+    <label for="ep_url">Enhancement Proposal PR URL</label>
     <input type="text" id="ep_url" name="ep_url"
            placeholder="https://github.com/openshift/enhancements/pull/1234" required>
-    <label for="cwd" style="margin-top:14px">Working Directory <span style="color:#999">(optional)</span></label>
-    <input type="text" id="cwd" name="cwd" placeholder="/path/to/operator-repo">
-    <button type="submit" id="submitBtn">Generate</button>
+    <button type="submit" id="submitBtn">Run Workflow</button>
   </form>
   <div id="status"></div>
+  <div class="phases" id="phases">
+    <div class="phase" data-phase="detect">
+      <span class="phase-icon"></span>
+      <span>Phase 0: Detect target repository</span>
+    </div>
+    <div class="phase" data-phase="clone">
+      <span class="phase-icon"></span>
+      <span>Phase 1: Clone repository</span>
+    </div>
+    <div class="phase" data-phase="api-types">
+      <span class="phase-icon"></span>
+      <span>Phase 2: PR #1 &mdash; API types + tests</span>
+    </div>
+    <div class="phase" data-phase="controller">
+      <span class="phase-icon"></span>
+      <span>Phase 3: PR #2 &mdash; Controller implementation</span>
+    </div>
+    <div class="phase" data-phase="e2e">
+      <span class="phase-icon"></span>
+      <span>Phase 4: PR #3 &mdash; E2E tests</span>
+    </div>
+    <div class="phase" data-phase="summary">
+      <span class="phase-icon"></span>
+      <span>Phase 5: Summary</span>
+    </div>
+  </div>
   <div id="conversation"></div>
   <pre id="output"></pre>
 </div>
@@ -74,6 +108,7 @@
 const form     = document.getElementById('epForm');
 const btn      = document.getElementById('submitBtn');
 const statusEl = document.getElementById('status');
+const phasesEl = document.getElementById('phases');
 const convEl   = document.getElementById('conversation');
 const outputEl = document.getElementById('output');
 
@@ -88,23 +123,57 @@ function truncate(str, maxLen) {
   return str.length <= maxLen ? str : str.substring(0, maxLen) + '\u2026';
 }
 
+// Phase detection from agent text output
+const PHASE_PATTERNS = [
+  { phase: 'detect',     pattern: /phase\s*0|detect.*repo/i },
+  { phase: 'clone',      pattern: /phase\s*1|clone.*repo|oape:init/i },
+  { phase: 'api-types',  pattern: /phase\s*2|pr\s*#?1|api.types|api.generate(?!-t)/i },
+  { phase: 'controller', pattern: /phase\s*3|pr\s*#?2|controller|api.implement/i },
+  { phase: 'e2e',        pattern: /phase\s*4|pr\s*#?3|e2e.gen/i },
+  { phase: 'summary',    pattern: /phase\s*5|workflow\s*complete|summary/i },
+];
+
+let currentPhase = null;
+
+function updatePhase(text) {
+  if (!text) return;
+  for (const {phase, pattern} of PHASE_PATTERNS) {
+    if (pattern.test(text)) {
+      if (phase !== currentPhase) {
+        // Mark previous as done
+        if (currentPhase) {
+          const prev = phasesEl.querySelector(`[data-phase="${currentPhase}"]`);
+          if (prev) { prev.classList.remove('active'); prev.classList.add('done'); }
+        }
+        currentPhase = phase;
+        const el = phasesEl.querySelector(`[data-phase="${phase}"]`);
+        if (el) { el.classList.add('active'); }
+      }
+      break;
+    }
+  }
+}
+
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const epUrl   = document.getElementById('ep_url').value.trim();
-  const cwd     = document.getElementById('cwd').value.trim();
-  const command = document.getElementById('command').value;
+  const epUrl = document.getElementById('ep_url').value.trim();
   if (!epUrl) return;
 
   btn.disabled = true;
+  currentPhase = null;
   outputEl.style.display = 'none';
   outputEl.textContent = '';
   convEl.style.display = 'none';
   convEl.innerHTML = '';
-  statusEl.innerHTML = '<span class="spinner"></span> Submitting job\u2026';
+  phasesEl.style.display = 'block';
+  // Reset phase indicators
+  phasesEl.querySelectorAll('.phase').forEach(p => {
+    p.classList.remove('active', 'done', 'failed');
+  });
+  statusEl.innerHTML = '<span class="spinner"></span> Submitting workflow\u2026';
 
   try {
-    const body = new URLSearchParams({ep_url: epUrl, command: command});
-    if (cwd) body.append('cwd', cwd);
+    const body = new URLSearchParams({ep_url: epUrl});
     const res = await fetch('/submit', {method: 'POST', body});
     if (!res.ok) { throw new Error((await res.json()).detail || res.statusText); }
     const {job_id} = await res.json();
@@ -124,6 +193,9 @@ function streamJob(jobId) {
     convEl.style.display = 'block';
     appendMessage(msg);
     updateStatus(msg);
+    // Try to detect phase from text or tool use
+    if (msg.content) updatePhase(msg.content);
+    if (msg.tool_name) updatePhase(msg.tool_name);
   });
 
   es.addEventListener('complete', (e) => {
@@ -131,8 +203,14 @@ function streamJob(jobId) {
     es.close();
     btn.disabled = false;
 
+    // Mark current phase as done
+    if (currentPhase) {
+      const el = phasesEl.querySelector(`[data-phase="${currentPhase}"]`);
+      if (el) { el.classList.remove('active'); el.classList.add('done'); }
+    }
+
     if (result.status === 'success') {
-      statusEl.innerHTML = 'Done! Cost: $' + (result.cost_usd || 0).toFixed(4);
+      statusEl.innerHTML = 'Workflow complete! Cost: $' + (result.cost_usd || 0).toFixed(4);
       if (result.output) {
         outputEl.textContent = result.output;
         outputEl.style.display = 'block';
@@ -140,6 +218,11 @@ function streamJob(jobId) {
     } else {
       statusEl.innerHTML = '<span class="error">Failed: '
         + escapeHtml(result.error || 'unknown error') + '</span>';
+      // Mark current phase as failed
+      if (currentPhase) {
+        const el = phasesEl.querySelector(`[data-phase="${currentPhase}"]`);
+        if (el) { el.classList.remove('active', 'done'); el.classList.add('failed'); }
+      }
     }
   });
 

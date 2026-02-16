@@ -23,7 +23,8 @@ The review covers four key modules:
 
 ## Arguments
 
-- `$1` (ticket_id): The Jira Ticket ID (e.g., OCPBUGS-12345). **Required.**
+- `$1` (ticket_id_or_NO_TICKET): The Jira Ticket ID (e.g., OCPBUGS-12345) **OR** the literal string `NO_TICKET`. **Required.**
+  - When `NO_TICKET` is provided, the review skips Jira validation and focuses on code quality, safety, and build consistency only.
 - `$2` (base_ref): The base git ref to diff against. Defaults to `origin/master`. **Optional.**
 
 
@@ -38,11 +39,16 @@ BASE_REF="${2:-origin/master}"
 ```
 
 ### Step 2: Fetch Context
-1. **Jira Issue**: Fetch the Jira issue details using curl:
-   ```bash
-   curl -s "https://issues.redhat.com/browse/$1"
-   ```
-   Focus on Acceptance Criteria as the primary validation source.
+1. **Jira Issue** (skip if `$1` is `NO_TICKET`):
+   - If `$1` is NOT `NO_TICKET`, fetch the Jira issue details using curl:
+     ```bash
+     curl -s "https://issues.redhat.com/browse/$1"
+     ```
+     Focus on Acceptance Criteria as the primary validation source.
+   - If `$1` IS `NO_TICKET`, skip Jira fetching entirely. The review will focus
+     on code quality (Modules A-D) without validating against Jira acceptance criteria.
+     In the Logic Verification module, skip the "Intent Match" check that compares
+     code against Jira requirements.
 
 2. **Git Diff**: Get the code changes:
    ```bash
@@ -61,7 +67,7 @@ Apply the following review criteria:
 #### Module A: Golang (Logic & Safety)
 
 **Logic Verification (The "Mental Sandbox")**:
-- **Intent Match:** Does the code implementation match the Jira Acceptance Criteria? Quote the Jira line that justifies the change.
+- **Intent Match:** (Skip if `NO_TICKET` mode) Does the code implementation match the Jira Acceptance Criteria? Quote the Jira line that justifies the change. In `NO_TICKET` mode, verify that the code changes are internally consistent and logically correct.
 - **Execution Trace:** Mentally simulate the function.
     - *Happy Path:* Does it succeed as expected?
     - *Error Path:* If the API fails, does it retry or return an error?
@@ -116,7 +122,7 @@ Returns a JSON report with the following structure, followed by an automatic fix
     "simplicity_score": "1-10"
   },
   "logic_verification": {
-    "jira_intent_met": true,
+    "jira_intent_met": true,  // Set to null in NO_TICKET mode
     "missing_edge_cases": ["List handled edge cases or gaps (e.g., 'Does not handle pod deletion')"]
   },
   "issues": [
