@@ -159,15 +159,15 @@ Returns available OAPE commands.
 
 ## Available Commands
 
-| Command | Description |
-|---------|-------------|
-| `init` | Clone an operator repository |
-| `api-generate` | Generate API types from enhancement proposal |
-| `api-generate-tests` | Generate integration tests for API types |
-| `api-implement` | Generate controller code from enhancement proposal |
-| `e2e-generate` | Generate e2e test artifacts from git diff |
-| `review` | Code review against Jira requirements |
-| `implement-review-fixes` | Apply fixes from review report |
+| Command | Description | Prompt Example |
+|---------|-------------|----------------|
+| `init` | Clone operator repository | `cert-manager-operator` |
+| `api-generate` | Generate API types | EP PR URL |
+| `api-generate-tests` | Generate integration tests | `api/v1alpha1/` |
+| `api-implement` | Generate controller code | EP PR URL |
+| `e2e-generate` | Generate e2e test artifacts | `main` (base branch) |
+| `review` | Code review against Jira | `OCPBUGS-12345` |
+| `implement-review-fixes` | Apply fixes from report | Report path |
 
 ## Tool Capabilities
 
@@ -185,7 +185,7 @@ The AI model can use these tools:
 
 ## How It Works
 
-1. **Request** → User submits a command with arguments
+1. **Request** → User submits command + prompt + working_dir
 2. **Context Loading** → `context_loader.py` reads:
    - `AGENTS.md` (base instructions)
    - `team-repos.csv` (allowed repositories)
@@ -193,7 +193,7 @@ The AI model can use these tools:
    - `plugins/oape/commands/{command}.md` (command instructions)
 3. **API Call** → `vertex_client.py` sends to Vertex AI:
    - System prompt = combined context
-   - User message = command + arguments
+   - User message = "Execute: {command} {prompt}"
    - Tools = available tool definitions
 4. **Tool Loop** → When model requests a tool:
    - `tools/executor.py` routes to appropriate tool
@@ -224,4 +224,3 @@ The AI model can use these tools:
 1. Create `plugins/oape/commands/{command}.md`
 2. Add to `COMMAND_FILES` in `context_loader.py`
 3. Optionally add command-specific skills to `COMMAND_SKILLS`
-

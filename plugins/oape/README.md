@@ -1,151 +1,112 @@
-# oape Plugin
+# OAPE Commands
 
 AI-driven OpenShift operator development tools, following OpenShift and Kubernetes API conventions.
 
 ## Commands
 
-### `/oape:init`
+### `init`
 
-Clones an allowed OpenShift operator repository by short name into the current directory so that subsequent `/oape:*` commands can operate immediately.
+Clones an allowed OpenShift operator repository by short name into the current directory.
 
-**Usage:**
-```shell
-/oape:init cert-manager-operator
-```
+**Prompt:** Repository short name (e.g., `cert-manager-operator`)
 
 **What it does:**
-1. **Prechecks** -- Validates the short name argument, required tools (`git`, `gh`), and GitHub authentication.
-2. **Repository Resolution** -- Matches the short name against the allowlist (case-insensitive, with partial match disambiguation).
-3. **Clone** -- Runs `git clone --filter=blob:none` into the current working directory. If the directory already exists with the correct remote, reuses it.
-4. **Verify** -- Changes into the cloned directory and reports the Go module and detected framework.
+1. Validates the short name against the allowlist
+2. Runs `git clone --filter=blob:none`
+3. Verifies Go module and detects framework
 
-### `/oape:api-generate`
+### `api-generate`
 
-Reads an OpenShift enhancement proposal PR, extracts the required API changes, and generates compliant Go type definitions in the correct paths of the current OpenShift operator repository.
+Reads an OpenShift enhancement proposal PR, extracts API changes, and generates compliant Go type definitions.
 
-**Usage:**
-```shell
-/oape:api-generate https://github.com/openshift/enhancements/pull/1234
-```
+**Prompt:** Enhancement PR URL (e.g., `https://github.com/openshift/enhancements/pull/1234`)
 
 **What it does:**
-1. **Prechecks** -- Validates the PR URL, required tools (`gh`, `go`, `git`), GitHub authentication, repository type (must be an OpenShift operator repo with `openshift/api` dependency), and PR accessibility. Fails immediately if any precheck fails.
-2. **Knowledge Refresh** -- Fetches and internalizes the latest OpenShift and Kubernetes API conventions before generating any code.
-3. **Enhancement Analysis** -- Reads the enhancement proposal to extract API group, version, kinds, fields, validation requirements, feature gate info, and whether it is a configuration or workload API.
-4. **Code Generation** -- Generates or modifies Go type definitions following conventions derived from the authoritative documents and patterns from the existing codebase.
-5. **FeatureGate Registration** -- Adds FeatureGate to `features.go` when applicable.
+1. Fetches and internalizes OpenShift/Kubernetes API conventions
+2. Analyzes the enhancement proposal
+3. Generates Go type definitions following conventions
+4. Adds FeatureGate registration when applicable
 
-### `/oape:api-generate-tests`
+### `api-generate-tests`
 
-Generates `.testsuite.yaml` integration test files for OpenShift API type definitions. Reads Go types, CRD manifests, and validation markers to produce comprehensive test suites.
+Generates `.testsuite.yaml` integration test files for OpenShift API type definitions.
 
-**Usage:**
-```shell
-/oape:api-generate-tests api/v1alpha1/myresource_types.go
-```
+**Prompt:** Path to types file (e.g., `api/v1alpha1/myresource_types.go`)
 
 **What it does:**
-1. **Prechecks** -- Verifies the repository, identifies target API types, and checks for CRD manifests.
-2. **Type Analysis** -- Reads Go types to extract fields, validation markers, enums, unions, immutability rules, and feature gates.
-3. **Test Generation** -- Generates test cases covering: minimal valid create, valid/invalid field values, update scenarios, immutable fields, singleton name validation, discriminated unions, feature-gated fields, and status subresource tests.
-4. **File Output** -- Writes `.testsuite.yaml` files following the repo's existing naming and directory conventions.
+1. Reads Go types to extract fields, validation markers, enums
+2. Generates test cases covering create, update, validation, error scenarios
+3. Writes `.testsuite.yaml` files
 
-### `/oape:api-implement`
+### `api-implement`
 
-Reads an OpenShift enhancement proposal PR, extracts the required implementation logic, and generates complete controller/reconciler code following controller-runtime and operator-sdk conventions.
+Reads an enhancement proposal and generates complete controller/reconciler code.
 
-**Usage:**
-```shell
-/oape:api-implement https://github.com/openshift/enhancements/pull/1234
-```
+**Prompt:** Enhancement PR URL
 
 **What it does:**
-1. **Prechecks** -- Validates the PR URL, required tools (`gh`, `go`, `git`, `make`), GitHub authentication, repository type (controller-runtime or library-go), and PR accessibility.
-2. **Knowledge Refresh** -- Fetches and internalizes the latest controller-runtime patterns and operator best practices.
-3. **Enhancement Analysis** -- Reads the enhancement proposal to extract business logic requirements, reconciliation workflow, conditions, events, and error handling.
-4. **Pattern Detection** -- Identifies the controller layout pattern used in the repository.
-5. **Code Generation** -- Generates complete Reconcile() logic, SetupWithManager, finalizer handling, status updates, and event recording.
-6. **Controller Registration** -- Adds the new controller to the manager.
+1. Fetches controller-runtime patterns and operator best practices
+2. Analyzes enhancement for business logic requirements
+3. Generates Reconcile() logic, SetupWithManager, finalizers, status updates
+4. Registers controller with manager
 
-**Typical Workflow:**
-```shell
-# Clone the operator repository (if not already cloned)
-/oape:init cert-manager-operator
+### `e2e-generate`
 
-# Generate the API types
-/oape:api-generate https://github.com/openshift/enhancements/pull/1234
+Generates e2e test artifacts by analyzing git diff from a base branch.
 
-# Generate integration tests for the new types
-/oape:api-generate-tests api/v1alpha1/myresource_types.go
+**Prompt:** Base branch name (e.g., `main`)
 
-# Generate the controller implementation
-/oape:api-implement https://github.com/openshift/enhancements/pull/1234
-```
+**What it does:**
+1. Detects framework (controller-runtime vs library-go)
+2. Discovers API types, CRDs, existing e2e patterns
+3. Analyzes git diff to understand changes
+4. Generates test-cases.md, execution-steps.md, e2e_test.go or e2e_test.sh
+
+### `review`
+
+Performs production-grade code review against Jira requirements.
+
+**Prompt:** Jira ticket ID (e.g., `OCPBUGS-12345`)
+
+**What it does:**
+1. Fetches Jira issue details
+2. Analyzes git diff
+3. Reviews: Golang logic, bash scripts, operator metadata, build consistency
+4. Generates structured report with fix prompts
+
+### `implement-review-fixes`
+
+Automatically applies fixes from a review report.
+
+**Prompt:** Path to review report
+
+**What it does:**
+1. Parses review report
+2. Applies fixes in severity order (CRITICAL first)
+3. Verifies build still passes
 
 ---
 
-### `/oape:review`
+## Typical Workflow
 
-Performs a "Principal Engineer" level code review that verifies code changes against Jira requirements.
-
-**Usage:**
-```shell
-/oape:review OCPBUGS-12345
-/oape:review OCPBUGS-12345 origin/release-4.15
 ```
+# API call format: POST /api/v1/run
+# { "command": "<command>", "prompt": "<prompt>", "working_dir": "<path>" }
 
-**What it does:**
-1. **Fetches Jira Issue** -- Retrieves the ticket details and acceptance criteria
-2. **Analyzes Git Diff** -- Gets changes between base ref and HEAD
-3. **Reviews Code** -- Applies four review modules:
-   - **Golang Logic & Safety**: Intent matching, execution traces, edge cases, context usage, concurrency, error handling
-   - **Bash Scripts**: Safety patterns, variable quoting, temp file handling
-   - **Operator Metadata (OLM)**: RBAC updates, finalizer handling
-   - **Build Consistency**: Generation drift detection
-4. **Generates Report** -- Returns structured JSON with verdict, issues, and fix prompts
-5. **Applies Fixes Automatically** -- When issues are found, invokes `implement-review-fixes.md` to apply the suggested code changes in severity order (CRITICAL first), then verifies the build still passes
-
----
-
-### `/oape:e2e-generate`
-
-Generates e2e test artifacts for any OpenShift operator repository by discovering the repo structure and analyzing the git diff from a base branch.
-
-**Usage:**
-```shell
-# Generate e2e tests for changes since main
-/oape:e2e-generate main
-
-# Use a specific base branch and custom output directory
-/oape:e2e-generate origin/release-4.18 --output .work
+1. init → prompt: "cert-manager-operator"
+2. api-generate → prompt: "https://github.com/openshift/enhancements/pull/1234"
+3. api-generate-tests → prompt: "api/v1alpha1/"
+4. api-implement → prompt: "https://github.com/openshift/enhancements/pull/1234"
+5. e2e-generate → prompt: "main"
 ```
-
-**What it does:**
-1. **Prechecks** -- Validates the base branch argument, required tools (`git`, `go`), repository type (must be an OpenShift operator repo with controller-runtime or library-go), and verifies a non-empty git diff.
-2. **Discovery** -- Detects framework (controller-runtime vs library-go), API types, CRDs, existing e2e test patterns, install mechanism (OLM or manual), operator namespace, and sample CRs.
-3. **Diff Analysis** -- Categorizes changed files (API types, controllers, CRDs, RBAC, samples) and reads diff hunks to understand specific changes.
-4. **Generation** -- Produces four files in `output/e2e_<repo-name>/`:
-   - `test-cases.md` -- Test scenarios with context, prerequisites, install, CR deployment, diff-specific tests, verification, cleanup
-   - `execution-steps.md` -- Step-by-step `oc` commands
-   - `e2e_test.go` or `e2e_test.sh` -- Go (Ginkgo) or bash test code matching the repo's existing e2e pattern
-   - `e2e-suggestions.md` -- Coverage recommendations
-
-**Supports:**
-- controller-runtime operators (Ginkgo e2e) -- e.g., cert-manager-operator, external-secrets-operator
-- library-go operators (bash e2e) -- e.g., secrets-store-csi-driver-operator
-- Operators with in-repo API types or external types from openshift/api
-
-See [e2e-test-generator/](e2e-test-generator/) for fixture templates and pattern documentation.
 
 ## Prerequisites
 
-- **go** -- Go toolchain
-- **git** -- Git
-- **gh** (GitHub CLI) -- installed and authenticated (for api-generate, api-implement, review)
-- **make** -- Make (for api-implement)
-- **curl** -- For fetching Jira issues (for review)
-- **oc** -- OpenShift CLI (recommended, for running generated execution steps)
-- Must be run from within an OpenShift operator repository
+- **go** — Go toolchain
+- **git** — Git
+- **gh** (GitHub CLI) — installed and authenticated
+- **make** — Make
+- **curl** — For fetching Jira issues (review command)
 
 ## Conventions Enforced
 
@@ -153,3 +114,7 @@ See [e2e-test-generator/](e2e-test-generator/) for fixture templates and pattern
 - [Kubernetes API Conventions](https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md)
 - [Kubebuilder Controller Patterns](https://book.kubebuilder.io/cronjob-tutorial/controller-implementation)
 - [Controller-Runtime Best Practices](https://pkg.go.dev/sigs.k8s.io/controller-runtime)
+
+## Supported Repositories
+
+See [team-repos.csv](../../team-repos.csv) for the list of allowed repositories.
