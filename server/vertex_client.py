@@ -81,7 +81,7 @@ class VertexClient:
         """
         self.project_id = project_id or os.environ.get("ANTHROPIC_VERTEX_PROJECT_ID")
         self.region = region or os.environ.get("CLOUD_ML_REGION", "us-east5")
-        self.model = model or os.environ.get("ANTHROPIC_MODEL", "claude-3-5-sonnet-v2@20241022")
+        self.model = model or os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5@20250929")
         self.max_tokens = max_tokens
 
         if not self.project_id:
@@ -101,7 +101,7 @@ class VertexClient:
         tools: list[dict],
         tool_executor: Callable[[str, dict], ToolResult],
         on_message: Callable[[ConversationMessage], None] | None = None,
-        max_iterations: int = 50,
+        max_iterations: int = 100,
     ) -> AgentResult:
         """
         Run a conversation with the model, executing tools as needed.

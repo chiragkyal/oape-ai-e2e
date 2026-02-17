@@ -1193,13 +1193,333 @@ Cleanup on Deletion:
 
 Feature Gate: <FeatureGateName> (if applicable)
 
-Next Steps:
-  1. Review the generated controller code
-  2. Run 'make generate' to update generated code
-  3. Run 'make manifests' to update RBAC/CRD manifests
-  4. Run 'make build' to verify compilation
-  5. Run 'make test' to run tests
-  6. Run 'make lint' to check for issues
+Proceeding to Phase 10: Validation and Auto-Fix...
+```
+
+---
+
+### Phase 10: Validation and Auto-Fix Loop
+
+After generating code, automatically validate and fix any issues. This phase runs iteratively until all checks pass or max attempts are reached.
+
+#### 10.1 Run Code Generation and Manifests
+
+```bash
+cd "$REPO_ROOT"
+
+echo "=== Running make generate ==="
+if ! make generate 2>&1; then
+  echo "WARNING: 'make generate' had issues"
+fi
+
+echo ""
+echo "=== Running make manifests ==="
+if ! make manifests 2>&1; then
+  echo "WARNING: 'make manifests' had issues"
+fi
+```
+
+#### 10.2 Validation Loop
+
+```thinking
+I MUST run validation in a loop until all checks pass:
+
+MAX_FIX_ATTEMPTS = 5
+current_attempt = 0
+
+while current_attempt < MAX_FIX_ATTEMPTS:
+    errors_found = []
+    
+    # Step 1: Check compilation
+    compile_output = run("go build ./...")
+    if compile_output has errors:
+        errors_found.append(("compile", compile_output))
+    
+    # Step 2: Run unit tests
+    test_output = run("make test" or "go test ./...")
+    if test_output has failures:
+        errors_found.append(("test", test_output))
+    
+    # Step 3: Run linter
+    lint_output = run("make lint" or "golangci-lint run")
+    if lint_output has issues:
+        errors_found.append(("lint", lint_output))
+    
+    # Step 4: Check if all passed
+    if len(errors_found) == 0:
+        print("All validations passed!")
+        break
+    
+    # Step 5: Attempt to fix each error
+    for error_type, error_output in errors_found:
+        analyze_error(error_output)
+        apply_fix()
+    
+    current_attempt += 1
+
+if current_attempt >= MAX_FIX_ATTEMPTS:
+    print("WARNING: Max fix attempts reached. Manual intervention required.")
+    print_remaining_errors()
+```
+
+#### 10.3 Compile Check
+
+```bash
+cd "$REPO_ROOT"
+
+echo "=== Checking compilation ==="
+BUILD_OUTPUT=$(go build ./... 2>&1)
+BUILD_EXIT=$?
+
+if [ $BUILD_EXIT -ne 0 ]; then
+  echo "COMPILATION ERRORS FOUND:"
+  echo "$BUILD_OUTPUT"
+  # Store for fix analysis
+  echo "$BUILD_OUTPUT" > /tmp/build_errors.txt
+else
+  echo "✓ Compilation successful"
+fi
+```
+
+#### 10.4 Analyze and Fix Compilation Errors
+
+```thinking
+When compilation errors occur, I MUST analyze and fix them systematically:
+
+**Common Error Types and Fixes:**
+
+1. **Undefined: <identifier>**
+   - Missing import: Add the required import
+   - Typo in identifier: Correct the spelling
+   - Wrong package: Check package name/receiver
+
+2. **imported and not used: "<package>"**
+   - Remove unused import
+   - Or add usage if import was intended
+
+3. **cannot use X (type Y) as type Z**
+   - Type conversion needed
+   - Wrong function argument
+   - Interface not implemented
+
+4. **undefined: <type>.<field>**
+   - Field doesn't exist in struct
+   - Check API types for correct field name
+   - May need pointer dereference
+
+5. **too many arguments / not enough arguments**
+   - Function signature changed
+   - Check function definition
+
+6. **syntax error**
+   - Missing bracket, parenthesis, or semicolon
+   - Review the code structure
+
+For EACH error:
+1. Parse the file path and line number
+2. Read the relevant code section
+3. Identify the fix
+4. Apply the fix using edit_file
+5. Re-run compilation to verify
+```
+
+#### 10.5 Run Unit Tests
+
+```bash
+cd "$REPO_ROOT"
+
+echo "=== Running unit tests ==="
+
+# Try make test first, fall back to go test
+if make test 2>&1; then
+  echo "✓ All tests passed"
+else
+  TEST_OUTPUT=$(make test 2>&1 || go test ./... 2>&1)
+  TEST_EXIT=$?
+  
+  if [ $TEST_EXIT -ne 0 ]; then
+    echo "TEST FAILURES FOUND:"
+    echo "$TEST_OUTPUT"
+    echo "$TEST_OUTPUT" > /tmp/test_errors.txt
+  fi
+fi
+```
+
+#### 10.6 Analyze and Fix Test Failures
+
+```thinking
+When test failures occur, I MUST analyze and fix them:
+
+**Test Failure Analysis:**
+
+1. **Compilation errors in test files**
+   - Same fixes as compilation errors
+   - May need test-specific imports
+
+2. **Assertion failures**
+   - Expected vs actual mismatch
+   - Review test expectations
+   - May indicate bug in implementation
+
+3. **Nil pointer dereference**
+   - Missing initialization
+   - Nil check needed
+
+4. **Timeout failures**
+   - Test takes too long
+   - May need mock instead of real operation
+
+5. **Missing test dependencies**
+   - Mock not set up
+   - Test fixtures missing
+
+For EACH failure:
+1. Identify the failing test
+2. Read the test code
+3. Read the implementation being tested
+4. Determine if fix is in test or implementation
+5. Apply the fix
+6. Re-run specific test to verify
+```
+
+#### 10.7 Run Linter
+
+```bash
+cd "$REPO_ROOT"
+
+echo "=== Running linter ==="
+
+# Try make lint first, fall back to golangci-lint
+if command -v golangci-lint &> /dev/null; then
+  LINT_CMD="golangci-lint run --timeout 5m"
+elif [ -f Makefile ] && grep -q "lint:" Makefile; then
+  LINT_CMD="make lint"
+else
+  LINT_CMD="go vet ./..."
+fi
+
+LINT_OUTPUT=$($LINT_CMD 2>&1)
+LINT_EXIT=$?
+
+if [ $LINT_EXIT -eq 0 ]; then
+  echo "✓ Linter passed"
+else
+  echo "LINT ISSUES FOUND:"
+  echo "$LINT_OUTPUT"
+  echo "$LINT_OUTPUT" > /tmp/lint_errors.txt
+fi
+```
+
+#### 10.8 Analyze and Fix Lint Issues
+
+```thinking
+When lint issues occur, I MUST analyze and fix them:
+
+**Common Lint Issues and Fixes:**
+
+1. **unused variable/parameter**
+   - Remove if truly unused
+   - Use _ for intentionally ignored values
+   - Prefix with _ if parameter must exist
+
+2. **exported <X> should have comment**
+   - Add godoc comment
+   - Format: // <Name> <description>
+
+3. **error return value not checked**
+   - Add error handling
+   - Or explicitly ignore with _
+
+4. **ineffectual assignment**
+   - Remove unused assignment
+   - Or use the value
+
+5. **should use X instead of Y**
+   - Follow linter suggestion (e.g., errors.Is vs ==)
+
+6. **cyclomatic complexity too high**
+   - Refactor into smaller functions
+   - Reduce nested conditionals
+
+7. **line too long**
+   - Break long lines
+   - Use intermediate variables
+
+8. **magic number**
+   - Extract to named constant
+
+For EACH issue:
+1. Parse file:line:column from output
+2. Read the code context
+3. Apply the appropriate fix
+4. Re-run linter on that file
+```
+
+#### 10.9 Fix Loop Execution
+
+Execute the validation and fix loop:
+
+```thinking
+I will now execute the validation loop:
+
+for attempt in range(1, MAX_FIX_ATTEMPTS + 1):
+    print(f"=== Validation Attempt {attempt}/{MAX_FIX_ATTEMPTS} ===")
+    
+    # Run all validations
+    compile_ok = run_compile_check()
+    test_ok = run_tests()
+    lint_ok = run_linter()
+    
+    if compile_ok and test_ok and lint_ok:
+        print("✓ ALL VALIDATIONS PASSED")
+        break
+    
+    # Fix errors in priority order: compile > test > lint
+    if not compile_ok:
+        print("Fixing compilation errors...")
+        for error in parse_compile_errors():
+            fix_compile_error(error)
+    
+    elif not test_ok:
+        print("Fixing test failures...")
+        for failure in parse_test_failures():
+            fix_test_failure(failure)
+    
+    elif not lint_ok:
+        print("Fixing lint issues...")
+        for issue in parse_lint_issues():
+            fix_lint_issue(issue)
+
+if attempt >= MAX_FIX_ATTEMPTS:
+    print("⚠ Max attempts reached. Remaining issues:")
+    print_remaining_issues()
+```
+
+#### 10.10 Validation Summary
+
+After the validation loop completes, output a summary:
+
+```text
+=== Validation Summary ===
+
+Compilation: ✓ PASSED / ✗ FAILED
+Unit Tests:  ✓ PASSED / ✗ FAILED  
+Linter:      ✓ PASSED / ✗ FAILED
+
+Fix Attempts: X/5
+
+Fixes Applied:
+  - <file>:<line> — <description of fix>
+  - <file>:<line> — <description of fix>
+  ...
+
+Remaining Issues (if any):
+  - <file>:<line> — <issue description>
+  ...
+
+Recommended Manual Actions (if any):
+  1. <action>
+  2. <action>
 ```
 
 ---
