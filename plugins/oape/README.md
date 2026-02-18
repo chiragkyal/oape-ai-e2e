@@ -67,6 +67,24 @@ Reads an OpenShift enhancement proposal PR, extracts the required implementation
 5. **Code Generation** -- Generates complete Reconcile() logic, SetupWithManager, finalizer handling, status updates, and event recording.
 6. **Controller Registration** -- Adds the new controller to the manager.
 
+### `/oape:analyze-rfe`
+
+Analyzes a Jira Request for Enhancement (RFE) and generates a structured breakdown of Epics, user stories, and their outcomes. Requires `JIRA_PERSONAL_TOKEN` for Jira API access.
+
+**Usage:**
+```shell
+/oape:analyze-rfe RFE-7841
+/oape:analyze-rfe https://issues.redhat.com/browse/RFE-7841
+```
+
+**What it does:**
+1. **Fetch RFE** -- Retrieves the RFE from Jira (REST API).
+2. **Parse** -- Extracts nature, description, desired behavior, affected components.
+3. **Workspace context** (optional) -- Uses `context.md` files (e.g. `docs/component-context/context.md`) when present to enrich scope and key areas.
+4. **Generate EPIC(s)** -- Objective, scope, acceptance criteria.
+5. **Generate user stories** -- "As a... I want... So that..." with acceptance criteria and outcomes.
+6. **Output** -- Markdown report; optionally saved to `.work/jira/analyze-rfe/<rfe-key>/breakdown.md`.
+
 **Typical Workflow:**
 ```shell
 # Clone the operator repository (if not already cloned)
@@ -143,7 +161,8 @@ See [e2e-test-generator/](e2e-test-generator/) for fixture templates and pattern
 - **git** -- Git
 - **gh** (GitHub CLI) -- installed and authenticated (for api-generate, api-implement, review)
 - **make** -- Make (for api-implement)
-- **curl** -- For fetching Jira issues (for review)
+- **curl** -- For fetching Jira issues (for review, analyze-rfe)
+- **JIRA_PERSONAL_TOKEN** -- For analyze-rfe (Jira REST API)
 - **oc** -- OpenShift CLI (recommended, for running generated execution steps)
 - Must be run from within an OpenShift operator repository
 

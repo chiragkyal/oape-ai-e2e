@@ -45,7 +45,7 @@ ln -s oape-ai-e2e ~/.cursor/commands/oape-ai-e2e
 
 | Plugin | Description | Commands |
 | ------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------- |
-| **[oape](plugins/oape/)** | AI-driven OpenShift operator development tools | `/oape:init`, `/oape:api-generate`, `/oape:api-generate-tests`, `/oape:api-implement`, `/oape:e2e-generate`, `/oape:review`, `/oape:implement-review-fixes` |
+| **[oape](plugins/oape/)** | AI-driven OpenShift operator development tools | `/oape:init`, `/oape:api-generate`, `/oape:api-generate-tests`, `/oape:api-implement`, `/oape:analyze-rfe`, `/oape:e2e-generate`, `/oape:review`, `/oape:implement-review-fixes` |
 
 ## Commands
 
@@ -79,6 +79,15 @@ Reads an OpenShift enhancement proposal PR, extracts the required implementation
 
 ```shell
 /oape:api-implement https://github.com/openshift/enhancements/pull/1234
+```
+
+### `/oape:analyze-rfe` -- Analyze RFE and Generate EPIC/Stories Breakdown
+
+Analyzes a Jira Request for Enhancement (RFE) and produces a structured breakdown of Epics, user stories, and outcomes. Requires `JIRA_PERSONAL_TOKEN` for Jira API access.
+
+```shell
+/oape:analyze-rfe RFE-7841
+/oape:analyze-rfe https://issues.redhat.com/browse/RFE-7841
 ```
 
 ### `/oape:e2e-generate` -- Generate E2E Test Artifacts

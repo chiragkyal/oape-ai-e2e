@@ -37,6 +37,7 @@ with open(Path(__file__).resolve().parent / "config.json") as cf:
 # Supported commands and their corresponding plugin skill names.
 SUPPORTED_COMMANDS = {
     "api-implement": "oape:api-implement",
+    "analyze-rfe": "oape:analyze-rfe",
 }
 
 

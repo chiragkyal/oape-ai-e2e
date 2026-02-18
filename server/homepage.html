@@ -58,8 +58,9 @@
     <label for="command">Command</label>
     <select id="command" name="command">
       <option value="api-implement" selected>api-implement</option>
+      <option value="analyze-rfe">analyze-rfe</option>
     </select>
-    <label for="ep_url" style="margin-top:14px">Enhancement Proposal PR URL</label>
+    <label for="ep_url" id="ep_url_label" style="margin-top:14px">Enhancement Proposal PR URL</label>
     <input type="text" id="ep_url" name="ep_url"
            placeholder="https://github.com/openshift/enhancements/pull/1234" required>
     <label for="cwd" style="margin-top:14px">Working Directory <span style="color:#999">(optional)</span></label>
@@ -76,6 +77,20 @@ const btn      = document.getElementById('submitBtn');
 const statusEl = document.getElementById('status');
 const convEl   = document.getElementById('conversation');
 const outputEl = document.getElementById('output');
+const epUrlLabel = document.getElementById('ep_url_label');
+const epUrlInput = document.getElementById('ep_url');
+
+function updateInputLabel() {
+  const command = document.getElementById('command').value;
+  if (command === 'analyze-rfe') {
+    epUrlLabel.textContent = 'RFE key or Jira URL';
+    epUrlInput.placeholder = 'RFE-7841 or https://issues.redhat.com/browse/RFE-7841';
+  } else {
+    epUrlLabel.textContent = 'Enhancement Proposal PR URL';
+    epUrlInput.placeholder = 'https://github.com/openshift/enhancements/pull/1234';
+  }
+}
+document.getElementById('command').addEventListener('change', updateInputLabel);
 
 function escapeHtml(text) {
   const d = document.createElement('div');

@@ -36,6 +36,11 @@ app = FastAPI(
 EP_URL_PATTERN = re.compile(
     r"^https://github\.com/openshift/enhancements/pull/\d+/?$"
 )
+# RFE key (e.g. RFE-7841) or Jira browse URL
+RFE_INPUT_PATTERN = re.compile(
+    r"^(?:https://issues\.redhat\.com/browse/)?([A-Z]+-\d+)/?$",
+    re.IGNORECASE,
+)
 
 # ---------------------------------------------------------------------------
 # In-memory job store
@@ -50,6 +55,16 @@ def _validate_ep_url(ep_url: str) -> None:
             status_code=400,
             detail="Invalid enhancement PR URL. "
             "Expected format: https://github.com/openshift/enhancements/pull/<number>",
+        )
+
+
+def _validate_rfe_input(value: str) -> None:
+    """Raise HTTPException if value is not a valid RFE key or Jira URL."""
+    if not value or not RFE_INPUT_PATTERN.match(value.strip()):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid RFE input. Provide a Jira issue key (e.g. RFE-7841) "
+            "or URL: https://issues.redhat.com/browse/RFE-7841",
         )
 
 
@@ -81,7 +96,10 @@ async def submit_job(
     cwd: str = Form(default=""),
 ):
     """Validate inputs, create a background job, and return its ID."""
-    _validate_ep_url(ep_url)
+    if command == "analyze-rfe":
+        _validate_rfe_input(ep_url)
+    else:
+        _validate_ep_url(ep_url)
     if command not in SUPPORTED_COMMANDS:
         raise HTTPException(
             status_code=400,
