@@ -4,3 +4,5 @@ cert-manager Operator for Red Hat OpenShift,product downstream operator,https://
 cert-manager Operator for Red Hat OpenShift,istio integration,https://github.com/openshift/cert-manager-istio-csr.git,main
 External Secrets Operator for Red Hat OpenShift,upstream fork,https://github.com/openshift/external-secrets-operator.git,ai-staging-release-1.1
 External Secrets Operator for Red Hat OpenShift,product downstream operator,https://github.com/openshift/external-secrets-operator.git,duplicate-dest-ai-staging
+ZTWIM Operator for Red Hat OpenShift,product downstream operator,https://github.com/openshift/zero-trust-workload-identity-manager.git,ai-staging-release-4.20
+ZTWIM Operator for Red Hat OpenShift,upstream fork,https://github.com/spiffe/spire.git,ai-staging
