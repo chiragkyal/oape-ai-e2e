@@ -1,146 +1,239 @@
-# oape-ai-e2e
+# OAPE AI E2E
 
-AI-driven Feature Development tools.
+AI-driven end-to-end feature development tools for OpenShift operators.
 
-## Installation
+## Overview
 
-Add the marketplace:
-```shell
-/plugin marketplace add shiftweek/oape-ai-e2e
+OAPE (OpenShift AI-Powered Engineering) provides AI-driven tools that take an Enhancement Proposal (EP) and generate:
+1. **API type definitions** (Go structs)
+2. **Integration tests** for API types
+3. **Controller/reconciler** implementation code
+4. **E2E test artifacts**
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         OAPE Server (FastAPI)                           │
+│                                                                         │
+│  POST /api/v1/run                     GET /stream/{job_id}              │
+│  { command, prompt, working_dir }     (SSE streaming)                   │
+└───────────────────────────────────────┬─────────────────────────────────┘
+                                        │
+                                        ▼
+         ┌─────────────────────────────────────────────────┐
+         │            Google Vertex AI API                 │
+         │         (Claude / Anthropic Models)             │
+         └─────────────────────────────────────────────────┘
+                                        │
+                                        ▼
+         ┌─────────────────────────────────────────────────┐
+         │  plugins/oape/commands/*.md  (Command Logic)    │
+         │  plugins/oape/skills/*.md    (Reusable Skills)  │
+         │  (Loaded as system prompt context)              │
+         └─────────────────────────────────────────────────┘
 ```
 
-Install the plugin:
-```shell
-/plugin install oape@oape-ai-e2e
-```
+## Quick Start
 
-Use the commands:
-```shell
-/oape:api-generate https://github.com/openshift/enhancements/pull/1234
-```
-
-## Updating Plugins
-
-Update the marketplace (fetches latest plugin catalog):
-```shell
-/plugin marketplace update oape-ai-e2e
-```
-
-Reinstall the plugin (downloads new version):
-```shell
-/plugin install oape@oape-ai-e2e
-```
-
-## Using Cursor
-
-Cursor can discover the commands by symlinking this repo into your `~/.cursor/commands` directory:
+### 1. Install Dependencies
 
 ```bash
-mkdir -p ~/.cursor/commands
-git clone git@github.com:shiftweek/oape-ai-e2e.git
-ln -s oape-ai-e2e ~/.cursor/commands/oape-ai-e2e
+cd server
+pip install -r requirements.txt
 ```
 
-## Available Plugins
+### 2. Configure GCP Credentials
 
-| Plugin | Description | Commands |
-| ------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------- |
-| **[oape](plugins/oape/)** | AI-driven OpenShift operator development tools | `/oape:init`, `/oape:api-generate`, `/oape:api-generate-tests`, `/oape:api-implement`, `/oape:e2e-generate`, `/oape:review`, `/oape:implement-review-fixes` |
-
-## Commands
-
-### `/oape:init` -- Clone an Operator Repository
-
-Clones an allowed OpenShift operator repository by short name into the current directory.
-
-```shell
-/oape:init cert-manager-operator
+```bash
+export ANTHROPIC_VERTEX_PROJECT_ID="your-gcp-project-id"
+export CLOUD_ML_REGION="us-east5"
+export GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/gcloud/application_default_credentials.json"
 ```
 
-### `/oape:api-generate` -- Generate API Types from Enhancement Proposal
+### 3. Run Server
 
-Reads an OpenShift enhancement proposal PR, extracts the required API changes, and generates compliant Go type definitions in the correct paths of the current OpenShift operator repository.
-
-```shell
-/oape:api-generate https://github.com/openshift/enhancements/pull/1234
+```bash
+uvicorn main:app --reload --port 8000
 ```
 
-### `/oape:api-generate-tests` -- Generate Integration Tests for API Types
+### 4. Use the API
 
-Generates `.testsuite.yaml` integration test files for OpenShift API type definitions, covering create, update, validation, and error scenarios.
+**Web UI:** Open http://localhost:8000
 
-```shell
-/oape:api-generate-tests api/v1alpha1/myresource_types.go
+**API Call:**
+```bash
+curl -X POST http://localhost:8000/api/v1/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": "api-implement",
+    "prompt": "https://github.com/openshift/enhancements/pull/1234",
+    "working_dir": "/path/to/operator/repo"
+  }'
 ```
 
-### `/oape:api-implement` -- Generate Controller Implementation from Enhancement Proposal
+## Available Commands
 
-Reads an OpenShift enhancement proposal PR, extracts the required implementation logic, and generates complete controller/reconciler code following controller-runtime and operator-sdk conventions.
+| Command | Description | Prompt Example |
+|---------|-------------|----------------|
+| `init` | Clone an operator repository | `cert-manager-operator` |
+| `api-generate` | Generate API types from EP | `https://github.com/openshift/enhancements/pull/1234` |
+| `api-generate-tests` | Generate integration tests | `api/v1alpha1/` |
+| `api-implement` | Generate controller code | `https://github.com/openshift/enhancements/pull/1234` |
+| `e2e-generate` | Generate e2e test artifacts | `main` (base branch) |
+| `review` | Code review against Jira | `OCPBUGS-12345` |
+| `implement-review-fixes` | Apply fixes from report | `<report-path>` |
 
-```shell
-/oape:api-implement https://github.com/openshift/enhancements/pull/1234
+## Typical Workflow
+
+```bash
+# 1. Clone the operator repository
+curl -X POST http://localhost:8000/api/v1/run \
+  -H "Content-Type: application/json" \
+  -d '{"command": "init", "prompt": "cert-manager-operator"}'
+
+# 2. Generate API types from enhancement proposal
+curl -X POST http://localhost:8000/api/v1/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": "api-generate",
+    "prompt": "https://github.com/openshift/enhancements/pull/1234",
+    "working_dir": "/path/to/cert-manager-operator"
+  }'
+
+# 3. Generate integration tests
+curl -X POST http://localhost:8000/api/v1/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": "api-generate-tests",
+    "prompt": "api/v1alpha1/",
+    "working_dir": "/path/to/cert-manager-operator"
+  }'
+
+# 4. Generate controller implementation
+curl -X POST http://localhost:8000/api/v1/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": "api-implement",
+    "prompt": "https://github.com/openshift/enhancements/pull/1234",
+    "working_dir": "/path/to/cert-manager-operator"
+  }'
+
+# 5. Build and verify (run in operator repo)
+make generate && make manifests && make build && make test
+
+# 6. Generate e2e tests
+curl -X POST http://localhost:8000/api/v1/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": "e2e-generate",
+    "prompt": "main",
+    "working_dir": "/path/to/cert-manager-operator"
+  }'
 ```
 
-### `/oape:e2e-generate` -- Generate E2E Test Artifacts
+## API Endpoints
 
-Generates e2e test artifacts by discovering the repo structure and analyzing the git diff from a base branch.
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/` | GET | Web UI |
+| `/submit` | POST | Submit async job (returns job_id) |
+| `/status/{job_id}` | GET | Poll job status |
+| `/stream/{job_id}` | GET | SSE stream of conversation |
+| `/api/v1/run` | POST | Run command (sync, waits for completion) |
+| `/api/v1/commands` | GET | List available commands |
 
-```shell
-/oape:e2e-generate main
+## Project Structure
+
+```
+oape-ai-e2e/
+├── AGENTS.md               # AI agent instructions (system prompt)
+├── team-repos.csv          # Allowed operator repositories
+├── plugins/oape/           # Command and skill definitions
+│   ├── commands/           # Command logic (loaded as context)
+│   │   ├── init.md
+│   │   ├── api-generate.md
+│   │   ├── api-implement.md
+│   │   └── ...
+│   ├── skills/             # Reusable knowledge modules
+│   │   ├── effective-go/
+│   │   └── e2e-test-generator/
+│   └── e2e-test-generator/ # Fixtures and examples
+├── server/                 # FastAPI server
+│   ├── main.py             # API endpoints
+│   ├── vertex_client.py    # Vertex AI client
+│   ├── context_loader.py   # Loads MD files as context
+│   ├── tools/              # Tool implementations
+│   └── README.md
+├── deploy/                 # Kubernetes deployment
+│   └── deployment.yaml
+└── Dockerfile
 ```
 
-### `/oape:review` -- Code Review Against Jira Requirements
+## Supported Repositories
 
-Performs a production-grade code review that verifies code changes against Jira requirements.
+Defined in [`team-repos.csv`](team-repos.csv):
 
-```shell
-/oape:review OCPBUGS-12345
-/oape:review OCPBUGS-12345 origin/release-4.15
+| Product | Repository |
+|---------|------------|
+| cert-manager Operator | openshift/cert-manager-operator |
+| cert-manager Operator | openshift/jetstack-cert-manager |
+| cert-manager Operator | openshift/cert-manager-istio-csr |
+| External Secrets Operator | openshift/external-secrets-operator |
+
+## Framework Detection
+
+The server auto-detects the operator framework:
+
+| Framework | Detection | Code Pattern |
+|-----------|-----------|--------------|
+| **controller-runtime** | `sigs.k8s.io/controller-runtime` in go.mod | `Reconcile(ctx, req) (Result, error)` |
+| **library-go** | `github.com/openshift/library-go` in go.mod | `sync(ctx, syncCtx) error` |
+
+## Docker Deployment
+
+```bash
+# Build
+docker build -t oape-server .
+
+# Run
+docker run -p 8000:8000 \
+  -e ANTHROPIC_VERTEX_PROJECT_ID="your-project" \
+  -e CLOUD_ML_REGION="us-east5" \
+  -v $HOME/.config/gcloud:/secrets/gcloud:ro \
+  -e GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcloud/application_default_credentials.json \
+  oape-server
 ```
 
-### `/oape:implement-review-fixes` -- Apply Fixes from Review Report
+## Kubernetes Deployment
 
-Automatically applies code fixes from a review report.
-
-```shell
-/oape:implement-review-fixes <report-path>
+```bash
+# Update secrets in deploy/deployment.yaml
+kubectl apply -f deploy/deployment.yaml
 ```
 
-**Typical workflow:**
-```shell
-# Step 1: Clone the operator repository
-/oape:init cert-manager-operator
+## Environment Variables
 
-# Step 2: Generate API types
-/oape:api-generate https://github.com/openshift/enhancements/pull/1234
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `ANTHROPIC_VERTEX_PROJECT_ID` | Yes | GCP project ID |
+| `CLOUD_ML_REGION` | No | GCP region (default: `us-east5`) |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Yes | Path to GCP credentials JSON |
 
-# Step 3: Generate integration tests
-/oape:api-generate-tests api/v1alpha1/
+## Conventions Enforced
 
-# Step 4: Generate controller implementation
-/oape:api-implement https://github.com/openshift/enhancements/pull/1234
+- [OpenShift API Conventions](https://github.com/openshift/enhancements/blob/master/dev-guide/api-conventions.md)
+- [Kubernetes API Conventions](https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md)
+- [Kubebuilder Controller Patterns](https://book.kubebuilder.io/)
+- [Effective Go](https://go.dev/doc/effective_go)
 
-# Step 5: Generate e2e tests for your changes
-/oape:e2e-generate main
-```
+## Prerequisites
 
-### Adding a New Command
+- Python 3.11+
+- GCP project with Vertex AI enabled
+- GCP credentials with Vertex AI access
+- For operator work: `gh`, `go`, `git`, `make`
 
-1. Add a new markdown file under `plugins/oape/commands/`
-2. The command will be available as `/oape:<command-name>`
-3. Update the plugin `README.md` documenting the new command
+## License
 
-### Plugin Structure
-
-```text
-plugins/oape/
-├── ztwim-test-generator/   # ZTWIM fixtures, docs, skills (commands are in commands/)
-├── .claude-plugin/
-│   └── plugin.json           # Required: plugin metadata
-├── commands/
-│   └── <command-name>.md     # Slash commands
-├── skills/
-│   └── <skill-name>/
-│       └── SKILL.md          # Reusable agent skills (optional)
-└── README.md                 # Plugin documentation
-```
+See [LICENSE](LICENSE).

@@ -1,6 +1,6 @@
 # OAPE AI E2E Feature Development
 
-This document provides context for AI agents when working with the OAPE AI E2E Feature Development tools.
+This document provides context for the AI agent when executing OAPE commands.
 
 ## Purpose
 
@@ -11,36 +11,41 @@ This project provides AI-driven tools for end-to-end feature development in Open
 
 ## Commands
 
-| Command                                   | Purpose                                                        |
-| ----------------------------------------- | -------------------------------------------------------------- |
-| `/oape:init <repo-short-name>`            | Clone an allowed operator repo by short name                   |
-| `/oape:api-generate <EP-URL>`             | Generate Go API types from Enhancement Proposal                |
-| `/oape:api-generate-tests <path>`         | Generate integration test suites for API types                 |
-| `/oape:api-implement <EP-URL>`            | Generate controller code from Enhancement Proposal + API types |
-| `/oape:e2e-generate <base-branch>`        | Generate e2e test artifacts from git diff against base branch  |
-| `/oape:review <ticket_id> [base_ref]`     | Production-grade code review against Jira requirements         |
-| `/oape:implement-review-fixes <report>`   | Automatically apply fixes from a review report                 |
+| Command | Purpose |
+| ------- | ------- |
+| `init` | Clone an allowed operator repo by short name |
+| `api-generate` | Generate Go API types from Enhancement Proposal |
+| `api-generate-tests` | Generate integration test suites for API types |
+| `api-implement` | Generate controller code from Enhancement Proposal + API types |
+| `e2e-generate` | Generate e2e test artifacts from git diff against base branch |
+| `review` | Production-grade code review against Jira requirements |
+| `implement-review-fixes` | Automatically apply fixes from a review report |
 
 ## Typical Workflow
 
 ```bash
-# 1. Clone an operator repository (if not already cloned)
-/oape:init cert-manager-operator
+# 1. Clone an operator repository
+command: init
+prompt: cert-manager-operator
 
 # 2. Generate API types
-/oape:api-generate https://github.com/openshift/enhancements/pull/XXXX
+command: api-generate
+prompt: https://github.com/openshift/enhancements/pull/XXXX
 
 # 3. Generate integration tests for the API types
-/oape:api-generate-tests api/v1alpha1/
+command: api-generate-tests
+prompt: api/v1alpha1/
 
 # 4. Generate controller implementation
-/oape:api-implement https://github.com/openshift/enhancements/pull/XXXX
+command: api-implement
+prompt: https://github.com/openshift/enhancements/pull/XXXX
 
 # 5. Build and verify
-make generate && make manifests && make build && make test
+# (run in operator repo): make generate && make manifests && make build && make test
 
 # 6. Generate e2e tests for your changes
-/oape:e2e-generate main
+command: e2e-generate
+prompt: main
 ```
 
 ---
@@ -55,22 +60,32 @@ The allowed repositories and their base branches are defined in [`team-repos.csv
 
 The commands automatically detect which framework the repository uses:
 
-| Framework              | Detection                                   | Code Pattern                          |
-| ---------------------- | ------------------------------------------- | ------------------------------------- |
-| **controller-runtime** | `sigs.k8s.io/controller-runtime` in go.mod  | `Reconcile(ctx, req) (Result, error)` |
-| **library-go**         | `github.com/openshift/library-go` in go.mod | `sync(ctx, syncCtx) error`            |
+| Framework | Detection | Code Pattern |
+| --------- | --------- | ------------ |
+| **controller-runtime** | `sigs.k8s.io/controller-runtime` in go.mod | `Reconcile(ctx, req) (Result, error)` |
+| **library-go** | `github.com/openshift/library-go` in go.mod | `sync(ctx, syncCtx) error` |
 
 ---
 
 ## Project Structure
 
-
+```
+oape-ai-e2e/
+├── AGENTS.md               # This file - AI agent instructions
+├── team-repos.csv          # Allowed operator repositories
+├── plugins/oape/           # Command and skill definitions
+│   ├── commands/           # Command logic (loaded as context)
+│   ├── skills/             # Reusable knowledge modules
+│   └── e2e-test-generator/ # Fixtures and examples
+├── server/                 # FastAPI server (Vertex AI)
+└── deploy/                 # Kubernetes deployment
+```
 
 ---
 
 ## Prerequisites
 
-Before running commands, ensure:
+Before running commands, ensure the working directory has:
 
 - **gh** (GitHub CLI) - installed and authenticated (`gh auth login`)
 - **go** - Go toolchain installed
@@ -92,7 +107,25 @@ When generating code, these conventions are followed:
 
 ## Important Notes
 
-- Always run `/oape:api-generate` before `/oape:api-generate-tests` or `/oape:api-implement`
+- Always run `api-generate` before `api-generate-tests` or `api-implement`
 - The commands READ existing code patterns and replicate them
 - Generated code follows the repository's existing style
 - API types are NOT modified by `api-generate-tests` or `api-implement` (they only read them)
+
+---
+
+## Tool Capabilities
+
+You have access to these tools:
+
+| Tool | Description |
+| ---- | ----------- |
+| `bash` | Execute shell commands in working directory |
+| `read_file` | Read file contents |
+| `write_file` | Write/create files |
+| `edit_file` | Search and replace in files |
+| `glob` | Find files by pattern |
+| `grep` | Search file contents with regex |
+| `web_fetch` | Fetch URL contents (GitHub, docs, etc.) |
+
+Use these tools to explore the repository, fetch enhancement proposals, and generate code.

@@ -1,4 +1,15 @@
+# OAPE Server Dependencies
+# =======================
+
+# Web framework
 fastapi>=0.115.0
 uvicorn>=0.32.0
-claude-agent-sdk>=0.1.0
 sse-starlette>=2.0.0
+pydantic>=2.0.0
+python-multipart>=0.0.9
+
+# Anthropic SDK with Vertex AI support
+anthropic[vertex]>=0.40.0
+
+# Google Cloud authentication (for Vertex AI)
+google-auth>=2.0.0
