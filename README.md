@@ -45,7 +45,7 @@ ln -s oape-ai-e2e ~/.cursor/commands/oape-ai-e2e
 
 | Plugin | Description | Commands |
 | ------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------- |
-| **[oape](plugins/oape/)** | AI-driven OpenShift operator development tools | `/oape:init`, `/oape:api-generate`, `/oape:api-generate-tests`, `/oape:api-implement`, `/oape:analyze-rfe`, `/oape:e2e-generate`, `/oape:review`, `/oape:implement-review-fixes` |
+| **[oape](plugins/oape/)** | AI-driven OpenShift operator development tools | `/oape:init`, `/oape:api-generate`, `/oape:api-generate-tests`, `/oape:api-implement`, `/oape:analyze-rfe`, `/oape:e2e-generate`, `/oape:predict-regressions`, `/oape:review`, `/oape:implement-review-fixes` |
 
 ## Commands
 
@@ -98,6 +98,15 @@ Generates e2e test artifacts by discovering the repo structure and analyzing the
 /oape:e2e-generate main
 ```
 
+### `/oape:predict-regressions` -- Predict API Regressions and Breaking Changes
+
+Analyzes git diff to predict potential regressions, breaking changes, and backward compatibility issues. Combines static analysis with LLM-powered semantic analysis.
+
+```shell
+/oape:predict-regressions main
+/oape:predict-regressions origin/release-4.18 --output .reports
+```
+
 ### `/oape:review` -- Code Review Against Jira Requirements
 
 Performs a production-grade code review that verifies code changes against Jira requirements.
@@ -126,10 +135,13 @@ Automatically applies code fixes from a review report.
 # Step 3: Generate integration tests
 /oape:api-generate-tests api/v1alpha1/
 
-# Step 4: Generate controller implementation
+# Step 4: Predict potential regressions
+/oape:predict-regressions main
+
+# Step 5: Generate controller implementation
 /oape:api-implement https://github.com/openshift/enhancements/pull/1234
 
-# Step 5: Generate e2e tests for your changes
+# Step 6: Generate e2e tests for your changes
 /oape:e2e-generate main
 ```
 

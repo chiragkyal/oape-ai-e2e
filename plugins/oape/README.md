@@ -96,9 +96,41 @@ Analyzes a Jira Request for Enhancement (RFE) and generates a structured breakdo
 # Generate integration tests for the new types
 /oape:api-generate-tests api/v1alpha1/myresource_types.go
 
+# Predict potential regressions
+/oape:predict-regressions main
+
 # Generate the controller implementation
 /oape:api-implement https://github.com/openshift/enhancements/pull/1234
 ```
+
+---
+
+### `/oape:predict-regressions`
+
+Analyzes git diff to predict potential regressions, breaking changes, and backward compatibility issues in newly developed APIs.
+
+**Usage:**
+```shell
+/oape:predict-regressions main
+/oape:predict-regressions origin/release-4.18 --output .reports
+```
+
+**What it does:**
+1. **Prechecks** -- Validates base branch exists, verifies repository is a valid OpenShift operator, and confirms non-empty git diff.
+2. **Diff Extraction** -- Collects all API type changes, CRD schema changes, controller changes, RBAC changes, and webhook changes.
+3. **Static Analysis** -- Applies rule-based detection for common breaking changes: field removals, required field additions, type changes, enum value removals, API version additions without conversion, validation rule tightening, default value changes, and condition type changes.
+4. **LLM Analysis** -- Uses Claude to perform deep semantic analysis for subtle regressions: semantic changes, upgrade issues, performance concerns, edge cases, backward compatibility, and controller behavior changes.
+5. **Report Generation** -- Creates a comprehensive markdown report (`output/regression-report.md`) with severity-ordered findings (Critical/High/Medium/Low), impact analysis, evidence, mitigation recommendations, and suggested test scenarios.
+
+**Output:**
+- `output/regression-report.md` -- Detailed regression risk report with executive summary, findings by severity, recommended actions, and test scenarios.
+
+**Key Features:**
+- Combines static analysis with LLM-powered semantic analysis
+- Every finding includes specific mitigation steps and test scenarios
+- Prioritizes findings by severity and real-world impact
+- Framework-aware (controller-runtime vs library-go)
+- Focuses on API versioning, upgrade paths, and backward compatibility
 
 ---
 

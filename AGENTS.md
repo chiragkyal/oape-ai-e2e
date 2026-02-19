@@ -19,6 +19,7 @@ This project provides AI-driven tools for end-to-end feature development in Open
 | `/oape:api-implement <EP-URL>`            | Generate controller code from Enhancement Proposal + API types |
 | `/oape:analyze-rfe <rfe-key>`             | Analyze RFE and output EPIC, user stories, and outcomes         |
 | `/oape:e2e-generate <base-branch>`        | Generate e2e test artifacts from git diff against base branch  |
+| `/oape:predict-regressions <base-branch>` | Predict API regressions and breaking changes from git diff     |
 | `/oape:review <ticket_id> [base_ref]`     | Production-grade code review against Jira requirements         |
 | `/oape:implement-review-fixes <report>`   | Automatically apply fixes from a review report                 |
 
@@ -34,13 +35,16 @@ This project provides AI-driven tools for end-to-end feature development in Open
 # 3. Generate integration tests for the API types
 /oape:api-generate-tests api/v1alpha1/
 
-# 4. Generate controller implementation
+# 4. Predict potential regressions
+/oape:predict-regressions main
+
+# 5. Generate controller implementation
 /oape:api-implement https://github.com/openshift/enhancements/pull/XXXX
 
-# 5. Build and verify
+# 6. Build and verify
 make generate && make manifests && make build && make test
 
-# 6. Generate e2e tests for your changes
+# 7. Generate e2e tests for your changes
 /oape:e2e-generate main
 ```
 
