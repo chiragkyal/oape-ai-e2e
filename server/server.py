@@ -7,12 +7,10 @@ Usage:
 Endpoints:
     GET  /                                    - Homepage with submission form
     POST /submit                              - Submit a workflow job (returns job_id)
-    POST /submit-legacy                       - Submit a single-command job (returns job_id)
     GET  /status/{job_id}                     - Poll job status
     GET  /stream/{job_id}                     - SSE stream of agent conversation
     GET  /repos                               - List available repositories
     GET  /api/v1/oape-workflow                - Start full workflow (async)
-    GET  /api/v1/oape-api-implement           - Synchronous API-implement endpoint (legacy)
 """
 
 import asyncio
@@ -26,7 +24,7 @@ from fastapi import FastAPI, HTTPException, Query, Form
 from fastapi.responses import HTMLResponse
 from sse_starlette.sse import EventSourceResponse
 
-from agent import run_agent, run_workflow, SUPPORTED_COMMANDS, TEAM_REPOS
+from agent import run_workflow, TEAM_REPOS
 
 
 app = FastAPI(
@@ -128,38 +126,6 @@ async def submit_workflow_job(
     asyncio.create_task(_run_workflow_job(job_id, ep_url, repo, working_dir))
     return {"job_id": job_id}
 
-
-@app.post("/submit-legacy")
-async def submit_legacy_job(
-    ep_url: str = Form(...),
-    command: str = Form(default="api-implement"),
-    cwd: str = Form(default=""),
-):
-    """Validate inputs, create a single-command background job, and return its ID."""
-    _validate_ep_url(ep_url)
-    if command not in SUPPORTED_COMMANDS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported command: {command}. "
-            f"Supported: {', '.join(SUPPORTED_COMMANDS)}",
-        )
-    working_dir = _resolve_working_dir(cwd)
-
-    job_id = uuid.uuid4().hex[:12]
-    jobs[job_id] = {
-        "status": "running",
-        "mode": "legacy",
-        "ep_url": ep_url,
-        "command": command,
-        "cwd": working_dir,
-        "conversation": [],
-        "message_event": asyncio.Condition(),
-        "output": "",
-        "cost_usd": 0.0,
-        "error": None,
-    }
-    asyncio.create_task(_run_legacy_job(job_id, command, ep_url, working_dir))
-    return {"job_id": job_id}
 
 
 @app.get("/status/{job_id}")
@@ -265,30 +231,6 @@ async def _run_workflow_job(
         condition.notify_all()
 
 
-async def _run_legacy_job(
-    job_id: str, command: str, ep_url: str, working_dir: str
-):
-    """Run a single command in the background and stream messages to the job store."""
-    condition = jobs[job_id]["message_event"]
-    loop = asyncio.get_running_loop()
-
-    def on_message(msg: dict) -> None:
-        jobs[job_id]["conversation"].append(msg)
-        loop.create_task(_notify(condition))
-
-    result = await run_agent(command, ep_url, working_dir, on_message=on_message)
-    if result.success:
-        jobs[job_id]["status"] = "success"
-        jobs[job_id]["output"] = result.output
-        jobs[job_id]["cost_usd"] = result.cost_usd
-    else:
-        jobs[job_id]["status"] = "failed"
-        jobs[job_id]["error"] = result.error
-
-    # Final notification so SSE clients see the status change
-    async with condition:
-        condition.notify_all()
-
 
 async def _notify(condition: asyncio.Condition) -> None:
     """Notify all waiters on the condition."""
@@ -342,33 +284,3 @@ async def api_workflow(
     }
 
 
-@app.get("/api/v1/oape-api-implement")
-async def api_implement(
-    ep_url: str = Query(
-        ...,
-        description="GitHub PR URL for the OpenShift enhancement proposal "
-        "(e.g. https://github.com/openshift/enhancements/pull/1234)",
-    ),
-    cwd: str = Query(
-        default="",
-        description="Absolute path to the operator repository where code "
-        "will be generated. Defaults to the current working directory.",
-    ),
-):
-    """Generate controller/reconciler code from an enhancement proposal (synchronous)."""
-    _validate_ep_url(ep_url)
-    working_dir = _resolve_working_dir(cwd)
-
-    result = await run_agent("api-implement", ep_url, working_dir)
-    if not result.success:
-        raise HTTPException(
-            status_code=500, detail=f"Agent execution failed: {result.error}"
-        )
-
-    return {
-        "status": "success",
-        "ep_url": ep_url,
-        "cwd": working_dir,
-        "output": result.output,
-        "cost_usd": result.cost_usd,
-    }
