@@ -19,22 +19,21 @@ WORKDIR /app
 COPY server/requirements.txt .
 RUN python3.11 -m pip install --no-cache-dir -r requirements.txt
 
-# Copy server code and config
-COPY server/*.py server/agent.py server/homepage.html ./
+# Copy worker code: main.py (entrypoint) + agent.py (workflow logic)
+COPY server/main.py server/agent.py ./
 
-# copy default config, users willing to customize should mount at runtime.
+# Copy default config; users willing to customize should mount at runtime.
 COPY config /config
 
 # Copy plugins directory
-# server.py resolves: Path(__file__).parent.parent / "plugins" / "oape"
-# With __file__=/app/server.py, parent.parent=/, so it expects /plugins/oape
+# agent.py resolves: Path(__file__).parent.parent / "plugins" / "oape"
+# With __file__=/app/agent.py, parent.parent=/, so it expects /plugins/oape
 COPY plugins /plugins
 
 USER 1001
 
-EXPOSE 8000
-
 RUN git config --global user.name "openshift-app-platform-shift-bot"
 RUN git config --global user.email "267347085+openshift-app-platform-shift-bot@users.noreply.github.com"
 
-CMD gh auth setup-git && uvicorn server:app --host 0.0.0.0 --port 8000
+# No default CMD — the K8s Job specifies the command:
+# ["sh", "-c", "gh auth setup-git && python3.11 /app/main.py"]

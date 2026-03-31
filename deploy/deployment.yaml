@@ -1,3 +1,4 @@
+# --- Shared Resources (consumed by worker Jobs) ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -18,44 +19,148 @@ stringData:
   # that can authenticate with GCP project.
   application_default_credentials.json: '{}'
 ---
+# --- Orchestrator Config ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oape-orchestrator-config
+data:
+  GITHUB_APP_ID: "3065249"
+  WORKER_IMAGE: "ghcr.io/shiftweek/oape-ai-e2e:latest"
+  TTL_AFTER_FINISHED: "3600"
+  WORKER_ENV_CONFIGMAP: "oape-server-config"
+  GCLOUD_SECRET_NAME: "gcloud-adc-secret"
+---
+# --- GitHub App Private Key ---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: github-app-private-key
+type: Opaque
+data:
+  # base64-encoded PEM private key for the GitHub App
+  private-key.pem: ""
+---
+# --- RBAC ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: oape-orchestrator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: oape-job-manager
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: oape-job-manager-binding
+subjects:
+  - kind: ServiceAccount
+    name: oape-orchestrator
+roleRef:
+  kind: Role
+  name: oape-job-manager
+  apiGroup: rbac.authorization.k8s.io
+---
+# --- Token Service ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: oape-server
+  name: oape-token-service
   labels:
-    app: oape-server
+    app: oape-token-service
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: oape-server
+      app: oape-token-service
   template:
     metadata:
       labels:
-        app: oape-server
+        app: oape-token-service
     spec:
       containers:
-        - name: oape-server
-          image: ghcr.io/shiftweek/oape-ai-e2e:latest
+        - name: token-service
+          image: ghcr.io/shiftweek/oape-ai-e2e-token-service:latest
           ports:
-            - containerPort: 8000
+            - containerPort: 8081
+          env:
+            - name: GITHUB_APP_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: oape-orchestrator-config
+                  key: GITHUB_APP_ID
+            - name: GITHUB_APP_PRIVATE_KEY_PATH
+              value: /secrets/github-app/private-key.pem
+          volumeMounts:
+            - name: github-app-key
+              mountPath: /secrets/github-app
+              readOnly: true
+      volumes:
+        - name: github-app-key
+          secret:
+            secretName: github-app-private-key
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: oape-token-service
+spec:
+  selector:
+    app: oape-token-service
+  ports:
+    - port: 8081
+      targetPort: 8081
+  type: ClusterIP
+---
+# --- Orchestrator (Go Webserver) ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oape-orchestrator
+  labels:
+    app: oape-orchestrator
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: oape-orchestrator
+  template:
+    metadata:
+      labels:
+        app: oape-orchestrator
+    spec:
+      serviceAccountName: oape-orchestrator
+      containers:
+        - name: orchestrator
+          image: ghcr.io/shiftweek/oape-ai-e2e-orchestrator:latest
+          ports:
+            - containerPort: 8080
           envFrom:
             - configMapRef:
-                name: oape-server-config
+                name: oape-orchestrator-config
           env:
-            - name: GOOGLE_APPLICATION_CREDENTIALS
-              value: /secrets/gcloud/application_default_credentials.json
+            - name: TOKEN_SERVICE_URL
+              value: http://oape-token-service:8081
+            - name: CONFIG_DIR
+              value: /config
           volumeMounts:
-            - name: gcloud-adc
-              mountPath: /secrets/gcloud
-              readOnly: true
             - name: config
               mountPath: /config
               readOnly: true
       volumes:
-        - name: gcloud-adc
-          secret:
-            secretName: gcloud-adc-secret
         - name: config
           configMap:
             name: oape-configs
@@ -63,11 +168,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: oape-server
+  name: oape-orchestrator
 spec:
   selector:
-    app: oape-server
+    app: oape-orchestrator
   ports:
-    - port: 8000
-      targetPort: 8000
+    - port: 8080
+      targetPort: 8080
   type: ClusterIP
