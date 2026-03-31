@@ -9,7 +9,7 @@
   body { font-family: system-ui, -apple-system, sans-serif; background: #f5f5f5;
          display: flex; justify-content: center; padding: 40px 16px; }
   .card { background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.1);
-          padding: 32px; max-width: 800px; width: 100%; }
+          padding: 32px; max-width: 900px; width: 100%; }
   h1 { font-size: 1.4rem; margin-bottom: 4px; }
   p.sub { color: #666; font-size: .9rem; margin-bottom: 24px; }
   label { display: block; font-weight: 600; margin-bottom: 6px; font-size: .9rem; }
@@ -25,42 +25,22 @@
              vertical-align: middle; margin-right: 8px; }
   @keyframes spin { to { transform: rotate(360deg); } }
   #status { margin-top: 20px; font-size: .9rem; color: #555; }
-  #conversation { margin-top: 16px; background: #fafafa; border: 1px solid #e0e0e0;
-                  border-radius: 6px; max-height: 500px; overflow-y: auto;
-                  display: none; }
-  #conversation .msg { padding: 10px 14px; border-bottom: 1px solid #eee;
-                       font-size: .85rem; line-height: 1.5; }
-  #conversation .msg:last-child { border-bottom: none; }
-  .msg-text { color: #333; }
-  .msg-text .label { font-weight: 600; color: #4a90d9; margin-right: 6px; }
-  .msg-tool { color: #8B6914; background: #FFF8E7; font-family: monospace; font-size: .82rem; }
-  .msg-tool-result { color: #555; background: #f5f5f5; font-family: monospace;
-                     font-size: .82rem; white-space: pre-wrap; word-break: break-word; }
-  .msg-thinking { color: #7B1FA2; background: #F3E5F5; font-style: italic; }
-  .msg-result { color: #2E7D32; background: #E8F5E9; font-weight: 600; }
-  .msg-other { color: #888; font-size: .8rem; }
-  #output { margin-top: 16px; background: #1e1e1e; color: #d4d4d4;
-            padding: 16px; border-radius: 6px; font-family: monospace;
-            font-size: .85rem; white-space: pre-wrap; word-break: break-word;
-            max-height: 500px; overflow-y: auto; display: none; }
+  #logOutput { margin-top: 16px; background: #1e1e1e; color: #d4d4d4;
+               border-radius: 6px; padding: 16px; font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+               font-size: .8rem; line-height: 1.6; max-height: 600px; overflow-y: auto;
+               display: none; white-space: pre-wrap; word-break: break-word; }
   .error { color: #c0392b; }
-  .content-preview { max-height: 120px; overflow: hidden; position: relative; }
-  .content-preview.expanded { max-height: none; }
-  .toggle-expand { color: #4a90d9; cursor: pointer; font-size: .8rem;
-                   display: inline-block; margin-top: 4px; }
   .workflow-info { background: #E3F2FD; border: 1px solid #BBDEFB; border-radius: 6px;
                    padding: 12px 16px; margin-bottom: 20px; font-size: .85rem; }
   .workflow-info h3 { font-size: .9rem; margin-bottom: 8px; color: #1565C0; }
   .workflow-info ul { margin: 0; padding-left: 20px; color: #333; }
   .workflow-info li { margin-bottom: 4px; }
-  .pr-list { margin-top: 16px; background: #E8F5E9; border: 1px solid #C8E6C9;
-             border-radius: 6px; padding: 12px 16px; display: none; }
-  .pr-list h3 { font-size: .9rem; margin-bottom: 8px; color: #2E7D32; }
-  .pr-list a { color: #1565C0; text-decoration: none; }
-  .pr-list a:hover { text-decoration: underline; }
-  .pr-item { margin-bottom: 8px; font-size: .85rem; }
   .field-group { margin-bottom: 14px; }
   .field-hint { font-size: .8rem; color: #888; margin-top: 4px; }
+  .log-line { padding: 1px 0; }
+  .log-line-success { color: #4EC9B0; }
+  .log-line-error { color: #F44747; }
+  .log-line-pr { color: #569CD6; }
 </style>
 </head>
 <body>
@@ -93,40 +73,24 @@
       <div class="field-hint">The enhancement proposal that describes the feature</div>
     </div>
 
-    <div class="field-group">
-      <label for="cwd">Working Directory <span style="color:#999">(optional)</span></label>
-      <input type="text" id="cwd" name="cwd" placeholder="/path/to/working-dir">
-      <div class="field-hint">Directory where repositories will be cloned (defaults to current directory)</div>
-    </div>
-
     <button type="submit" id="submitBtn">Start Workflow</button>
   </form>
 
   <div id="status"></div>
-  <div id="prList" class="pr-list">
-    <h3>Created Pull Requests</h3>
-    <div id="prItems"></div>
-  </div>
-  <div id="conversation"></div>
-  <pre id="output"></pre>
+  <div id="logOutput"></div>
 </div>
 <script>
 const form      = document.getElementById('epForm');
 const btn       = document.getElementById('submitBtn');
 const statusEl  = document.getElementById('status');
-const convEl    = document.getElementById('conversation');
-const outputEl  = document.getElementById('output');
-const prListEl  = document.getElementById('prList');
-const prItemsEl = document.getElementById('prItems');
+const logEl     = document.getElementById('logOutput');
 const repoSelect = document.getElementById('repo');
 
-// Fetch available repositories on page load, grouped by product
 async function loadRepos() {
   try {
     const res = await fetch('/repos');
     if (res.ok) {
       const data = await res.json();
-      // Group repositories by product
       const groups = {};
       data.repositories.forEach(repo => {
         if (!groups[repo.product]) groups[repo.product] = [];
@@ -138,7 +102,7 @@ async function loadRepos() {
         repos.forEach(repo => {
           const option = document.createElement('option');
           option.value = repo.short_name;
-          option.textContent = `${repo.short_name} — ${repo.role} (${repo.base_branch})`;
+          option.textContent = `${repo.short_name} \u2014 ${repo.role} (${repo.base_branch})`;
           optgroup.appendChild(option);
         });
         repoSelect.appendChild(optgroup);
@@ -156,35 +120,23 @@ function escapeHtml(text) {
   return d.innerHTML;
 }
 
-function truncate(str, maxLen) {
-  if (!str) return '';
-  return str.length <= maxLen ? str : str.substring(0, maxLen) + '\u2026';
-}
-
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
   const epUrl = document.getElementById('ep_url').value.trim();
   const repo  = document.getElementById('repo').value;
-  const cwd   = document.getElementById('cwd').value.trim();
-
   if (!epUrl || !repo) return;
 
   btn.disabled = true;
-  outputEl.style.display = 'none';
-  outputEl.textContent = '';
-  convEl.style.display = 'none';
-  convEl.innerHTML = '';
-  prListEl.style.display = 'none';
-  prItemsEl.innerHTML = '';
+  logEl.style.display = 'none';
+  logEl.innerHTML = '';
   statusEl.innerHTML = '<span class="spinner"></span> Submitting workflow job\u2026';
 
   try {
     const body = new URLSearchParams({ep_url: epUrl, repo: repo});
-    if (cwd) body.append('cwd', cwd);
     const res = await fetch('/submit', {method: 'POST', body});
     if (!res.ok) { throw new Error((await res.json()).detail || res.statusText); }
     const {job_id} = await res.json();
-    statusEl.innerHTML = '<span class="spinner"></span> Connecting to agent stream\u2026';
+    statusEl.innerHTML = '<span class="spinner"></span> Waiting for worker pod\u2026';
     streamJob(job_id);
   } catch (err) {
     statusEl.innerHTML = '<span class="error">Error: ' + escapeHtml(err.message) + '</span>';
@@ -194,39 +146,64 @@ form.addEventListener('submit', async (e) => {
 
 function streamJob(jobId) {
   const es = new EventSource('/stream/' + jobId);
+  logEl.style.display = 'block';
 
-  es.addEventListener('message', (e) => {
-    const msg = JSON.parse(e.data);
-    convEl.style.display = 'block';
-    appendMessage(msg);
-    updateStatus(msg);
+  es.addEventListener('log', (e) => {
+    const line = document.createElement('div');
+    line.className = 'log-line';
+    const text = e.data;
+
+    // Highlight special lines.
+    if (text.startsWith('WORKFLOW_SUCCESS') || text.startsWith('PR_CREATED')) {
+      line.classList.add('log-line-success');
+    } else if (text.startsWith('WORKFLOW_FAILED')) {
+      line.classList.add('log-line-error');
+    } else if (text.includes('github.com') && text.includes('/pull/')) {
+      line.classList.add('log-line-pr');
+    }
+
+    line.textContent = text;
+    logEl.appendChild(line);
+    logEl.scrollTop = logEl.scrollHeight;
+
+    // Update status bar with last text-type message.
+    try {
+      const msg = JSON.parse(text);
+      if (msg.type === 'assistant' && msg.block_type === 'text') {
+        const preview = (msg.content || '').substring(0, 80);
+        statusEl.innerHTML = '<span class="spinner"></span> ' + escapeHtml(preview);
+      } else if (msg.type === 'assistant' && msg.block_type === 'tool_use') {
+        statusEl.innerHTML = '<span class="spinner"></span> Running: ' + escapeHtml(msg.tool_name) + '\u2026';
+      }
+    } catch (_) {
+      // Not JSON, that's fine.
+    }
+  });
+
+  es.addEventListener('status', (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      if (data.status === 'waiting_for_pod') {
+        statusEl.innerHTML = '<span class="spinner"></span> Waiting for worker pod\u2026';
+      } else if (data.status && data.status.startsWith('pod_')) {
+        statusEl.innerHTML = '<span class="spinner"></span> Pod status: ' + data.status.replace('pod_', '') + '\u2026';
+      }
+    } catch (_) {}
   });
 
   es.addEventListener('complete', (e) => {
-    const result = JSON.parse(e.data);
     es.close();
     btn.disabled = false;
-
-    if (result.status === 'success') {
-      statusEl.innerHTML = 'Done! Cost: $' + (result.cost_usd || 0).toFixed(4);
-      if (result.output) {
-        outputEl.textContent = result.output;
-        outputEl.style.display = 'block';
+    try {
+      const result = JSON.parse(e.data);
+      if (result.status === 'succeeded') {
+        statusEl.innerHTML = 'Workflow completed successfully.';
+      } else {
+        statusEl.innerHTML = '<span class="error">Workflow ' + escapeHtml(result.status)
+          + (result.message ? ': ' + escapeHtml(result.message) : '') + '</span>';
       }
-      // Show created PRs
-      if (result.prs && result.prs.length > 0) {
-        prListEl.style.display = 'block';
-        prItemsEl.innerHTML = result.prs.map((pr, i) => `
-          <div class="pr-item">
-            <strong>PR #${i + 1}:</strong>
-            <a href="${escapeHtml(pr.pr_url)}" target="_blank">${escapeHtml(pr.title || pr.pr_url)}</a>
-            <span style="color:#888">(${escapeHtml(pr.branch_name || '')})</span>
-          </div>
-        `).join('');
-      }
-    } else {
-      statusEl.innerHTML = '<span class="error">Failed: '
-        + escapeHtml(result.error || 'unknown error') + '</span>';
+    } catch (_) {
+      statusEl.innerHTML = 'Workflow finished.';
     }
   });
 
@@ -237,56 +214,6 @@ function streamJob(jobId) {
       statusEl.innerHTML = '<span class="error">Stream connection lost</span>';
     }
   });
-}
-
-function appendMessage(msg) {
-  const div = document.createElement('div');
-  div.className = 'msg';
-
-  if (msg.type === 'assistant' && msg.block_type === 'text') {
-    div.classList.add('msg-text');
-    div.innerHTML = '<span class="label">Assistant</span>'
-      + escapeHtml(msg.content);
-  } else if (msg.type === 'assistant' && msg.block_type === 'tool_use') {
-    div.classList.add('msg-tool');
-    const inputPreview = truncate(JSON.stringify(msg.tool_input), 200);
-    div.innerHTML = '&#9881; <b>' + escapeHtml(msg.tool_name) + '</b> '
-      + '<span style="color:#aaa">' + escapeHtml(inputPreview) + '</span>';
-  } else if (msg.type === 'assistant' && msg.block_type === 'tool_result') {
-    div.classList.add('msg-tool-result');
-    const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
-    const preview = truncate(content, 500);
-    const prefix = msg.is_error ? '&#10060; ' : '&#10004; ';
-    div.innerHTML = prefix + escapeHtml(preview);
-  } else if (msg.type === 'assistant' && msg.block_type === 'thinking') {
-    div.classList.add('msg-thinking');
-    div.textContent = 'Thinking\u2026';
-  } else if (msg.type === 'result') {
-    div.classList.add('msg-result');
-    div.textContent = 'Result received (cost: $'
-      + (msg.cost_usd || 0).toFixed(4) + ')';
-  } else {
-    div.classList.add('msg-other');
-    div.textContent = '[' + (msg.type || 'event') + '] '
-      + truncate(msg.content || '', 100);
-  }
-
-  convEl.appendChild(div);
-  convEl.scrollTop = convEl.scrollHeight;
-}
-
-function updateStatus(msg) {
-  if (msg.type === 'assistant' && msg.block_type === 'text') {
-    statusEl.innerHTML = '<span class="spinner"></span> '
-      + escapeHtml(truncate(msg.content, 80));
-  } else if (msg.type === 'assistant' && msg.block_type === 'tool_use') {
-    statusEl.innerHTML = '<span class="spinner"></span> Running: '
-      + escapeHtml(msg.tool_name) + '\u2026';
-  } else if (msg.type === 'assistant' && msg.block_type === 'thinking') {
-    statusEl.innerHTML = '<span class="spinner"></span> Agent is thinking\u2026';
-  } else if (msg.type === 'result') {
-    statusEl.innerHTML = '<span class="spinner"></span> Finalizing\u2026';
-  }
 }
 </script>
 </body>
