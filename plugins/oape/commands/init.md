@@ -121,6 +121,7 @@ REPO_MAP["external-secrets-operator"]="https://github.com/openshift/external-sec
 REPO_MAP["external-secrets"]="https://github.com/openshift/external-secrets"
 REPO_MAP["ztiwm-operator"]="https://github.com/openshift/zero-trust-workload-identity-manager"
 REPO_MAP["ztiwm-spire"]="https://github.com/openshift/spiffe-spire"
+REPO_MAP["must-gather-operator"]="https://github.com/openshift/must-gather-operator"
 
 INPUT=$(echo "$REPO_SHORT_NAME" | tr '[:upper:]' '[:lower:]')
 
