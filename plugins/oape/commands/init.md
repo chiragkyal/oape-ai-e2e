@@ -41,6 +41,9 @@ if [ -z "$REPO_SHORT_NAME" ]; then
   echo "  cert-manager-istio-csr     -- openshift/cert-manager-istio-csr"
   echo "  external-secrets-operator  -- openshift/external-secrets-operator"
   echo "  external-secrets           -- openshift/external-secrets"
+  echo "  ztiwm-operator             -- openshift/zero-trust-workload-identity-manager"
+  echo "  ztiwm-spire                -- openshift/spiffe-spire"
+  echo "  must-gather-operator       -- openshift/must-gather-operator"
   exit 1
 fi
 
@@ -102,6 +105,7 @@ I must match the user-provided short name against the allowlist. The allowlist i
   external-secrets          -> https://github.com/openshift/external-secrets
   ztiwm-operator            -> https://github.com/openshift/zero-trust-workload-identity-manager
   ztiwm-spire               -> https://github.com/openshift/spiffe-spire
+  must-gather-operator      -> https://github.com/openshift/must-gather-operator
 
 Matching rules (applied in order):
 1. Exact match (case-insensitive): if the lowercased input exactly equals a short name, use it.
@@ -121,6 +125,7 @@ REPO_MAP["external-secrets-operator"]="https://github.com/openshift/external-sec
 REPO_MAP["external-secrets"]="https://github.com/openshift/external-secrets"
 REPO_MAP["ztiwm-operator"]="https://github.com/openshift/zero-trust-workload-identity-manager"
 REPO_MAP["ztiwm-spire"]="https://github.com/openshift/spiffe-spire"
+REPO_MAP["must-gather-operator"]="https://github.com/openshift/must-gather-operator"
 
 INPUT=$(echo "$REPO_SHORT_NAME" | tr '[:upper:]' '[:lower:]')
 
@@ -310,6 +315,9 @@ When failing, provide a clear error message explaining:
     - `cert-manager-istio-csr` -- openshift/cert-manager-istio-csr
     - `external-secrets-operator` -- openshift/external-secrets-operator
     - `external-secrets` -- openshift/external-secrets
+    - `ztiwm-operator` -- openshift/zero-trust-workload-identity-manager
+    - `ztiwm-spire` -- openshift/spiffe-spire
+    - `must-gather-operator` -- openshift/must-gather-operator
 
 ## Prerequisites
 

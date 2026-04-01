@@ -6,4 +6,5 @@ External Secrets Operator for Red Hat OpenShift,upstream fork,https://github.com
 External Secrets Operator for Red Hat OpenShift,product downstream operator,https://github.com/openshift/external-secrets-operator.git,ai-staging-release-1.0
 ZTWIM Operator for Red Hat OpenShift,product downstream operator,https://github.com/openshift/zero-trust-workload-identity-manager.git,ai-staging-release-1.0.0
 ZTWIM Operator for Red Hat OpenShift,upstream fork,https://github.com/openshift/spiffe-spire.git,release/v1.13.3
+Must Gather Operator for Red Hat OpenShift,product downstream operator,https://github.com/openshift/must-gather-operator.git,master
 
