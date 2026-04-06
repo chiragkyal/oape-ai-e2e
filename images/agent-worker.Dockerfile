@@ -16,19 +16,11 @@ RUN dnf install -y \
 WORKDIR /app
 
 # Install Python dependencies
-COPY server/requirements.txt .
+COPY agent/requirements.txt .
 RUN python3.11 -m pip install --no-cache-dir -r requirements.txt
 
 # Copy server code and config
-COPY server/server.py server/agent.py server/bg.py server/homepage.html ./
-
-# Copy git credential helper (reads token from sidecar's shared volume)
-COPY server/gh-credential-helper.sh /bin/gh-credential-helper
-
-# Copy GitHub App token generator and refresh loop (used by sidecar entrypoint)
-COPY server/ghpat.py /opt/ghtoken/ghpat.py
-COPY server/token-refresh.sh /opt/ghtoken/token-refresh.sh
-RUN chmod +x /opt/ghtoken/token-refresh.sh
+COPY agent/agent.py agent/main.py ./
 
 # copy default config, users willing to customize should mount at runtime.
 COPY deploy/config /config
@@ -43,13 +35,10 @@ COPY plugins /plugins
 RUN git config --global user.name "openshift-app-platform-shift-bot" && \
     git config --global user.email "267347085+openshift-app-platform-shift-bot@users.noreply.github.com"
 
-RUN chmod +x /bin/gh-credential-helper && \
-    chmod -R g=u /opt/app-root/src
-
-RUN git config --global credential.helper '/bin/gh-credential-helper'
+RUN chmod -R g=u /opt/app-root/src
 
 USER 1001
 
 EXPOSE 8000
 
-CMD uvicorn server:app --host 0.0.0.0 --port 8000
+CMD gh auth setup && python3.11 main.py
