@@ -60,11 +60,6 @@ if ! command -v git &> /dev/null; then
   MISSING_TOOLS="$MISSING_TOOLS git"
 fi
 
-# Check gh CLI
-if ! command -v gh &> /dev/null; then
-  MISSING_TOOLS="$MISSING_TOOLS gh(GitHub CLI)"
-fi
-
 if [ -n "$MISSING_TOOLS" ]; then
   echo "PRECHECK FAILED: Missing required tools:$MISSING_TOOLS"
   echo "Please install the missing tools and try again."
@@ -72,18 +67,6 @@ if [ -n "$MISSING_TOOLS" ]; then
 fi
 
 echo "Required tools are available."
-```
-
-#### Precheck 3 — Verify GitHub CLI Authentication
-
-```bash
-if ! gh auth status &> /dev/null 2>&1; then
-  echo "PRECHECK FAILED: GitHub CLI is not authenticated."
-  echo "Run 'gh auth login' to authenticate."
-  exit 1
-fi
-
-echo "GitHub CLI is authenticated."
 ```
 
 **If ALL prechecks above passed, proceed to Phase 1.**
@@ -283,7 +266,7 @@ Next Steps:
 The command MUST FAIL and STOP immediately if ANY of the following are true:
 
 1. **No argument provided**: No repository short name was given
-2. **Missing tools**: `git` or `gh` are not installed, or `gh` is not authenticated
+2. **Missing tools**: `git` is not installed
 3. **No match**: The short name does not match any allowed repository
 4. **Ambiguous match**: The short name matches multiple repositories (show them all)
 5. **Clone failed**: The git clone command fails (network, permissions, etc.)
@@ -322,5 +305,4 @@ When failing, provide a clear error message explaining:
 ## Prerequisites
 
 - **git** -- Git installed
-- **gh** (GitHub CLI) -- installed and authenticated (`gh auth login`)
 - Access to the `openshift` GitHub organization repositories
