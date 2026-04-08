@@ -1,4 +1,4 @@
-name: Build and Push Container Image
+name: Build and Push Container Images
 
 on:
   push:
@@ -8,7 +8,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build:
@@ -16,6 +15,16 @@ jobs:
     permissions:
       contents: read
       packages: write
+
+    strategy:
+      matrix:
+        image:
+          - name: agent-worker
+            dockerfile: images/agent-worker.Dockerfile
+          - name: gh-token-minter
+            dockerfile: images/gh-token-minter.Dockerfile
+          - name: go-server
+            dockerfile: images/go-server.Dockerfile
 
     steps:
       - name: Checkout repository
@@ -32,7 +41,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image.name }}
           tags: |
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
@@ -41,6 +50,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: ${{ matrix.image.dockerfile }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
