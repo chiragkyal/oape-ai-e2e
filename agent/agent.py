@@ -29,7 +29,6 @@ from claude_agent_sdk import (
 
 # Resolve the plugin directory (repo root) relative to this file.
 PLUGIN_DIR = str(Path(__file__).resolve().parent.parent / "plugins" / "oape")
-TEAM_REPOS_CSV = Path(__file__).resolve().parent.parent / "config" / "team-repos.csv"
 
 CONVERSATION_LOG = Path("/tmp/conversation.log")
 
@@ -41,53 +40,6 @@ conv_logger.addHandler(_handler)
 
 with open(Path(__file__).resolve().parent.parent / "config" / "config.json") as cf:
     CONFIGS = json.loads(cf.read())
-
-
-def load_team_repos() -> dict[str, dict]:
-    """Load team repositories from CSV file.
-
-    Returns:
-        dict mapping repo short name to {url, product, role}
-    """
-    repos = {}
-    with open(TEAM_REPOS_CSV, newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            url = row["repo_url"].rstrip(".git")
-            # Extract short name from URL (e.g., "cert-manager-operator" from URL)
-            short_name = url.split("/")[-1]
-            repos[short_name] = {
-                "url": url,
-                "product": row["product"],
-                "role": row["role"],
-            }
-    return repos
-
-
-TEAM_REPOS = load_team_repos()
-
-
-def get_repo_info(repo_short_name: str) -> dict | None:
-    """Get repository info by short name (case-insensitive, partial match)."""
-    name_lower = repo_short_name.lower()
-
-    # Exact match first
-    for key, info in TEAM_REPOS.items():
-        if key.lower() == name_lower:
-            return {**info, "short_name": key}
-
-    # Partial match
-    matches = [
-        (key, info)
-        for key, info in TEAM_REPOS.items()
-        if name_lower in key.lower()
-    ]
-    if len(matches) == 1:
-        key, info = matches[0]
-        return {**info, "short_name": key}
-
-    return None
-
 
 @dataclass
 class PRResult:
@@ -116,21 +68,17 @@ class WorkflowResult:
 
 def _build_workflow_prompt(
     ep_url: str,
-    repo_short_name: str,
     repo_info: dict,
 ) -> str:
     """Build the system prompt for the full workflow."""
-    base_branch = repo_info["base_branch"]
 
     return f"""You are an OpenShift operator feature developer assistant. Your task is to take an Enhancement Proposal (EP) and generate a complete implementation across three Pull Requests.
 
 ## Input Information
 
 - **Enhancement Proposal URL**: {ep_url}
-- **Target Repository**: {repo_short_name}
 - **Repository URL**: {repo_info['url']}
-- **Base Branch**: {base_branch}
-- **Product**: {repo_info['product']}
+- **Base Branch**: {repo_info["base_branch"]}
 
 ## Workflow Overview
 
@@ -138,31 +86,31 @@ You will create THREE separate Pull Requests, each building on the previous one:
 
 ### PR #1: API Type Definitions
 Branch: `feature/api-types-<ep-number>`
-1. Run `/oape:init {repo_info['url']} {base_branch}` to clone the repository and checkout the base branch
-2. Create and checkout a new branch from `{base_branch}`
+1. Run `/oape:init {repo_info['url']} {repo_info['base_branch']}` to clone the repository and checkout the base branch
+2. Create and checkout a new branch from `{repo_info['base_branch']}`
 3. Run `/oape:api-generate {ep_url}` to generate API type definitions
 4. Run `/oape:api-generate-tests <path-to-generated-types>` to generate integration tests
 5. Run `make generate && make manifests` to regenerate code
-6. Run `/oape:review OCPBUGS-0 {base_branch}` to review and auto-fix issues
+6. Run `/oape:review OCPBUGS-0 {repo_info['base_branch']}` to review and auto-fix issues
 7. Commit all changes with a descriptive message
-8. Push the branch and create a PR against `{base_branch}`
+8. Push the branch and create a PR against `{repo_info['base_branch']}`
 
 ### PR #2: Controller Implementation
 Branch: `feature/controller-impl-<ep-number>`
-1. Create and checkout a new branch from `{base_branch}` (or from PR #1's branch if needed)
+1. Create and checkout a new branch from `{repo_info['base_branch']}` (or from PR #1's branch if needed)
 2. Run `/oape:api-implement {ep_url}` to generate controller/reconciler code
 3. Run `make generate && make build` to verify the build
-4. Run `/oape:review OCPBUGS-0 {base_branch}` to review and auto-fix issues
+4. Run `/oape:review OCPBUGS-0 {repo_info['base_branch']}` to review and auto-fix issues
 5. Commit all changes with a descriptive message
-6. Push the branch and create a PR against `{base_branch}`
+6. Push the branch and create a PR against `{repo_info['base_branch']}`
 
 ### PR #3: E2E Tests
 Branch: `feature/e2e-tests-<ep-number>`
-1. Create and checkout a new branch from `{base_branch}` (or from PR #2's branch if needed)
-2. Run `/oape:e2e-generate {base_branch}` to generate e2e test artifacts
-3. Run `/oape:review OCPBUGS-0 {base_branch}` to review and auto-fix issues
+1. Create and checkout a new branch from `{repo_info['base_branch']}` (or from PR #2's branch if needed)
+2. Run `/oape:e2e-generate {repo_info['base_branch']}` to generate e2e test artifacts
+3. Run `/oape:review OCPBUGS-0 {repo_info['base_branch']}` to review and auto-fix issues
 4. Commit all changes with a descriptive message
-5. Push the branch and create a PR against `{base_branch}`
+5. Push the branch and create a PR against `{repo_info['base_branch']}`
 
 ## Execution Instructions
 
@@ -191,7 +139,7 @@ Begin now. Execute PR #1, then immediately PR #2, then immediately PR #3 — all
 
 async def run_workflow(
     ep_url: str,
-    repo_short_name: str,
+    repo_url: str,
     base_branch: str,
     on_message: Callable[[dict], None] | None = None,
 ) -> WorkflowResult:
@@ -199,7 +147,7 @@ async def run_workflow(
 
     Args:
         ep_url: The enhancement proposal PR URL.
-        repo_short_name: Short name of the target repository.
+        repo_url: URL for git repository.
         base_branch: The base branch to create feature branches from.
         on_message: Optional callback invoked with each conversation message
             dict as it arrives, enabling real-time streaming.
@@ -207,19 +155,10 @@ async def run_workflow(
     Returns:
         A WorkflowResult with the output, PRs created, or error.
     """
-    repo_info = get_repo_info(repo_short_name)
-    if repo_info is None:
-        return WorkflowResult(
-            output="",
-            cost_usd=0.0,
-            error=f"Unknown repository: {repo_short_name}. "
-            f"Available: {', '.join(TEAM_REPOS.keys())}",
-        )
-
-    # Override the base branch with user-provided value
-    repo_info = {**repo_info, "base_branch": base_branch}
-
-    prompt = _build_workflow_prompt(ep_url, repo_short_name, repo_info)
+    prompt = _build_workflow_prompt(ep_url, {
+        'url': repo_url,
+        'base_branch': base_branch
+    })
 
     working_dir = tempfile.mkdtemp(prefix="oape-")
 
@@ -245,7 +184,7 @@ async def run_workflow(
     cost_usd = 0.0
 
     conv_logger.info(
-        f"\n{'=' * 60}\n[workflow] ep_url={ep_url}  repo={repo_short_name}  "
+        f"\n{'=' * 60}\n[workflow] ep_url={ep_url}  repo={repo_url}  "
         f"cwd={working_dir}\n{'=' * 60}"
     )
 

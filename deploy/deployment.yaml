@@ -1,70 +1,104 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: oape-server
+  name: shift-go-server
   annotations:
-    serviceaccounts.openshift.io/oauth-redirectreference.oape-server: '{"kind":"OAuthRedirectReference","apiVersion":"v1","reference":{"kind":"Route","name":"oape-server"}}'
+    serviceaccounts.openshift.io/oauth-redirectreference.shift-go-server: '{"kind":"OAuthRedirectReference","apiVersion":"v1","reference":{"kind":"Route","name":"shift-go-server"}}'
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: shift-job-manager
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: shift-job-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: shift-job-manager
+subjects:
+  - kind: ServiceAccount
+    name: shift-go-server
+    # namespace: placeholder # Automatically updated by Kustomize, DO NOT FILL.
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: oape-server
+  name: shift-go-server
   labels:
-    app: oape-server
+    app: shift-go-server
 spec:
-  replicas: 1
+  replicas: 3
   selector:
     matchLabels:
-      app: oape-server
+      app: shift-go-server
   template:
     metadata:
       labels:
-        app: oape-server
+        app: shift-go-server
     spec:
-      serviceAccountName: oape-server
+      serviceAccountName: shift-go-server
       containers:
-        - name: oape-server
-          image: ghcr.io/shiftweek/oape-ai-e2e:latest
+        - name: shift-go-server
+          image: ghcr.io/shiftweek/oape-ai-e2e/go-server:latest
           ports:
-            - containerPort: 8000
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-              - ALL
-            runAsNonRoot: true
+            - containerPort: 8080
+          env:
+            - name: WORKER_IMAGE
+              value: ghcr.io/shiftweek/oape-ai-e2e/agent-worker:latest
+            - name: GH_TOKEN_SERVICE_URL
+              value: http://localhost:8081
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
           resources:
             requests:
               cpu: 500m
               memory: 512Mi
             limits:
-              cpu: "2"
-              memory: 4Gi
-          envFrom:
-            - configMapRef:
-                name: oape-server-config
+              cpu: "1"
+              memory: 1Gi
+        - name: ghpat-sidecar
+          image: ghcr.io/shiftweek/oape-ai-e2e/gh-token-minter:latest
+          ports:
+            - containerPort: 8081
           env:
-            - name: GOOGLE_APPLICATION_CREDENTIALS
-              value: /secrets/gcloud/application_default_credentials.json
+            - name: GH_APP_ID
+              value: "3065249"
+            - name: GH_APP_PEM_FILE_PATH
+              value: /etc/github-app/private-key.pem
+            - name: LISTEN_PORT
+              value: "8081"
           volumeMounts:
-            - name: gcloud-adc
-              mountPath: /secrets/gcloud
+            - name: gh-app-key
+              mountPath: /etc/github-app
               readOnly: true
-            - name: gh-token-shared
-              mountPath: /shared
-              readOnly: true
-            - name: config
-              mountPath: /config
-              readOnly: true
-        - name: ghtoken-sidecar
-          image: ghcr.io/shiftweek/oape-ai-e2e:latest
-          command: ["/opt/ghtoken/token-refresh.sh"]
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-              - ALL
-            runAsNonRoot: true
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            periodSeconds: 10
           resources:
             requests:
               cpu: 100m
@@ -72,17 +106,6 @@ spec:
             limits:
               cpu: 200m
               memory: 128Mi
-          env:
-            - name: GH_APP_ID
-              value: "3065249" # Replace with GitHub App ID if otherwise
-            - name: GH_APP_PEM_FILE_PATH
-              value: /secrets/gh-app/bot-key.pem
-          volumeMounts:
-            - name: gh-app-key
-              mountPath: /secrets/gh-app
-              readOnly: true
-            - name: gh-token-shared
-              mountPath: /shared
         - name: oauth-proxy
           image: registry.redhat.io/openshift4/ose-oauth-proxy-rhel9:v4.21
           imagePullPolicy: IfNotPresent
@@ -91,11 +114,11 @@ spec:
             - -https-address=:8888
             - -http-address=
             - -email-domain=*
-            - -upstream=http://localhost:8000
+            - -upstream=http://localhost:8080
             - -tls-cert=/etc/tls/private/tls.crt
             - -tls-key=/etc/tls/private/tls.key
             - -cookie-secret-file=/etc/proxy/secrets/session_secret
-            - -openshift-service-account=oape-server
+            - -openshift-service-account=shift-go-server
             - -openshift-ca=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
             - -skip-auth-regex=^/metrics
           ports:
@@ -116,43 +139,38 @@ spec:
               cpu: 200m
               memory: 128Mi
           volumeMounts:
-            - name: secret-oape-server-tls
+            - name: secret-shift-go-server-tls
               mountPath: /etc/tls/private
-            - name: secret-oape-server-proxy
+            - name: secret-shift-go-server-proxy
               mountPath: /etc/proxy/secrets
       volumes:
-        - name: gcloud-adc
-          secret:
-            secretName: gcloud-adc-secret
-        - name: gh-app-key
-          secret:
-            secretName: gh-app-secret
-        - name: gh-token-shared
-          emptyDir: {}
         - name: config
           configMap:
-            name: oape-configs
-        - name: secret-oape-server-tls
+            name: shift-server-config
+        - name: gh-app-key
+          secret:
+            secretName: github-app
+        - name: secret-shift-go-server-tls
           secret:
             defaultMode: 420
-            secretName: oape-server-tls
-        - name: secret-oape-server-proxy
+            secretName: shift-go-server-tls
+        - name: secret-shift-go-server-proxy
           secret:
             defaultMode: 420
-            secretName: oape-server-proxy
+            secretName: shift-go-server-proxy
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: oape-server
+  name: shift-go-server
   annotations:
-    service.alpha.openshift.io/serving-cert-secret-name: oape-server-tls
+    service.alpha.openshift.io/serving-cert-secret-name: shift-go-server-tls
 spec:
   selector:
-    app: oape-server
+    app: shift-go-server
   ports:
     - name: proxy
-      port: 8000
+      port: 8080
       protocol: TCP
       targetPort: oauth-proxy
   type: ClusterIP
@@ -160,11 +178,11 @@ spec:
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
-  name: oape-server
+  name: shift-go-server
 spec:
   to:
     kind: Service
-    name: oape-server
+    name: shift-go-server
   port:
     targetPort: proxy
   tls:

@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OAPE Operator Feature Developer</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, -apple-system, sans-serif; background: #f5f5f5;
+         display: flex; justify-content: center; padding: 40px 16px; }
+  .card { background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.1);
+          padding: 32px; max-width: 800px; width: 100%; }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  p.sub { color: #666; font-size: .9rem; margin-bottom: 24px; }
+  label { display: block; font-weight: 600; margin-bottom: 6px; font-size: .9rem; }
+  input[type=text], select { width: 100%; padding: 10px 12px; border: 1px solid #ccc;
+                   border-radius: 6px; font-size: .95rem; }
+  input[type=text]:focus, select:focus { outline: none; border-color: #4a90d9; }
+  button { margin-top: 16px; padding: 10px 24px; background: #4a90d9; color: #fff;
+           border: none; border-radius: 6px; font-size: .95rem; cursor: pointer; }
+  button:disabled { background: #aaa; cursor: not-allowed; }
+  .spinner { display: inline-block; width: 18px; height: 18px;
+             border: 3px solid #ccc; border-top-color: #4a90d9;
+             border-radius: 50%; animation: spin .8s linear infinite;
+             vertical-align: middle; margin-right: 8px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #status { margin-top: 20px; font-size: .9rem; color: #555; }
+  #logOutput { margin-top: 16px; background: #1e1e1e; color: #d4d4d4;
+            padding: 16px; border-radius: 6px; font-family: monospace;
+            font-size: .82rem; white-space: pre-wrap; word-break: break-word;
+            max-height: 600px; overflow-y: auto; display: none; }
+  .error { color: #c0392b; }
+  .workflow-info { background: #E3F2FD; border: 1px solid #BBDEFB; border-radius: 6px;
+                   padding: 12px 16px; margin-bottom: 20px; font-size: .85rem; }
+  .workflow-info h3 { font-size: .9rem; margin-bottom: 8px; color: #1565C0; }
+  .workflow-info ul { margin: 0; padding-left: 20px; color: #333; }
+  .workflow-info li { margin-bottom: 4px; }
+  .field-group { margin-bottom: 14px; }
+  .field-hint { font-size: .8rem; color: #888; margin-top: 4px; }
+  .result-success { margin-top: 16px; background: #E8F5E9; border: 1px solid #C8E6C9;
+                    border-radius: 6px; padding: 12px 16px; font-size: .85rem;
+                    color: #2E7D32; display: none; }
+  .result-failed { margin-top: 16px; background: #FFEBEE; border: 1px solid #FFCDD2;
+                   border-radius: 6px; padding: 12px 16px; font-size: .85rem;
+                   color: #C62828; display: none; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>OAPE Operator Feature Developer</h1>
+  <p class="sub">Generate complete operator implementation from an OpenShift Enhancement Proposal</p>
+
+  <div class="workflow-info">
+    <h3>Workflow Overview</h3>
+    <ul>
+      <li><strong>PR #1:</strong> API Types - init, api-generate, api-generate-tests, review</li>
+      <li><strong>PR #2:</strong> Controller - api-implement, review</li>
+      <li><strong>PR #3:</strong> E2E Tests - e2e-generate, review</li>
+    </ul>
+  </div>
+
+  <form id="epForm">
+    <div class="field-group">
+      <label for="repo">Target Repository</label>
+      <select id="repo" name="repo" required>
+        <option value="">-- Select a repository --</option>
+      </select>
+      <div class="field-hint">The operator repository where code will be generated</div>
+    </div>
+
+    <div class="field-group">
+      <label for="base_branch">Base Branch</label>
+      <input type="text" id="base_branch" name="base_branch"
+             placeholder="e.g. main, master, release-4.18" required>
+      <div class="field-hint">The branch to create feature branches from and target PRs against</div>
+    </div>
+
+    <div class="field-group">
+      <label for="ep_url">Enhancement Proposal PR URL</label>
+      <input type="text" id="ep_url" name="ep_url"
+             placeholder="https://github.com/openshift/enhancements/pull/1234" required>
+      <div class="field-hint">The enhancement proposal that describes the feature</div>
+    </div>
+
+    <button type="submit" id="submitBtn">Start Workflow</button>
+  </form>
+
+  <div id="status"></div>
+  <div id="resultSuccess" class="result-success"></div>
+  <div id="resultFailed" class="result-failed"></div>
+  <pre id="logOutput"></pre>
+</div>
+<script>
+const form        = document.getElementById('epForm');
+const btn         = document.getElementById('submitBtn');
+const statusEl    = document.getElementById('status');
+const logEl       = document.getElementById('logOutput');
+const successEl   = document.getElementById('resultSuccess');
+const failedEl    = document.getElementById('resultFailed');
+const repoSelect  = document.getElementById('repo');
+
+// Fetch available repositories on page load, grouped by product
+async function loadRepos() {
+  try {
+    const res = await fetch('/api/v1/repos');
+    if (res.ok) {
+      const data = await res.json();
+      const groups = {};
+      data.items.forEach(repo => {
+        if (!groups[repo.product]) groups[repo.product] = [];
+        groups[repo.product].push(repo);
+      });
+      Object.entries(groups).forEach(([product, repos]) => {
+        const optgroup = document.createElement('optgroup');
+        optgroup.label = product;
+        repos.forEach(repo => {
+          const option = document.createElement('option');
+          option.value = repo.url;
+          option.textContent = `${repo.url} — ${repo.role}`;
+          optgroup.appendChild(option);
+        });
+        repoSelect.appendChild(optgroup);
+      });
+    }
+  } catch (err) {
+    console.error('Failed to load repositories:', err);
+  }
+}
+loadRepos();
+
+function escapeHtml(text) {
+  const d = document.createElement('div');
+  d.textContent = text;
+  return d.innerHTML;
+}
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const epUrl = document.getElementById('ep_url').value.trim();
+  const repo  = document.getElementById('repo').value;
+  const baseBranch = document.getElementById('base_branch').value.trim();
+
+  if (!epUrl || !repo || !baseBranch) return;
+
+  btn.disabled = true;
+  logEl.style.display = 'none';
+  logEl.textContent = '';
+  successEl.style.display = 'none';
+  failedEl.style.display = 'none';
+  statusEl.innerHTML = '<span class="spinner"></span> Submitting workflow job\u2026';
+
+  try {
+    const body = JSON.stringify({ep_url: epUrl, repo_url: repo, base_branch: baseBranch});
+    const res = await fetch('/api/v1/workflows', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body
+    });
+    if (!res.ok) { throw new Error((await res.json()).detail || res.statusText); }
+    const {job_id} = await res.json();
+    statusEl.innerHTML = '<span class="spinner"></span> Connecting to log stream\u2026';
+    streamJob(job_id);
+  } catch (err) {
+    statusEl.innerHTML = '<span class="error">Error: ' + escapeHtml(err.message) + '</span>';
+    btn.disabled = false;
+  }
+});
+
+function streamJob(jobId) {
+  const es = new EventSource('/api/v1/workflows/' + jobId + '/stream');
+
+  es.addEventListener('status', (e) => {
+    const data = JSON.parse(e.data);
+    const s = data.status || 'unknown';
+    const label = s.replace(/_/g, ' ');
+    statusEl.innerHTML = '<span class="spinner"></span> ' + escapeHtml(label) + '\u2026';
+  });
+
+  es.addEventListener('log', (e) => {
+    logEl.style.display = 'block';
+    logEl.textContent += e.data + '\n';
+    logEl.scrollTop = logEl.scrollHeight;
+    // Update status with latest log line (truncated)
+    const line = e.data.length > 120 ? e.data.substring(0, 120) + '\u2026' : e.data;
+    statusEl.innerHTML = '<span class="spinner"></span> ' + escapeHtml(line);
+  });
+
+  es.addEventListener('complete', (e) => {
+    const result = JSON.parse(e.data);
+    es.close();
+    btn.disabled = false;
+
+    if (result.status === 'succeeded') {
+      statusEl.innerHTML = 'Workflow completed successfully.';
+      successEl.textContent = 'Job finished successfully.';
+      successEl.style.display = 'block';
+    } else {
+      const msg = result.message || 'unknown error';
+      statusEl.innerHTML = '<span class="error">Workflow failed.</span>';
+      failedEl.textContent = 'Job failed: ' + msg;
+      failedEl.style.display = 'block';
+    }
+  });
+
+  es.addEventListener('error', () => {
+    es.close();
+    btn.disabled = false;
+    if (statusEl.querySelector('.spinner')) {
+      statusEl.innerHTML = '<span class="error">Stream connection lost</span>';
+    }
+  });
+}
+</script>
+</body>
+</html>
