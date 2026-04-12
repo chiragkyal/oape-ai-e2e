@@ -1,6 +1,59 @@
 # oape-ai-e2e
 
-AI-driven Feature Development tools.
+Claude-based agentic workflow tool for Kubernetes operator controller development. 
+
+```mermaid
+ flowchart TD
+     subgraph Main["Development Agent"]
+         direction TB
+         START([Start]) --> INIT[init]
+     end
+
+     subgraph PR1["Phase 1: API Generation"]
+         INIT --> API_GEN[api-generate: CRD Updates]
+         API_GEN --> API_TESTS[api-generate-tests: Envtest Eval Updates]
+         API_TESTS --> REVIEW1[review-and-fix]
+         REVIEW1 --> RAISE_PR1[Raise PR #1]
+     end
+
+     subgraph PR2["Phase 2: API Implementation"]
+         RAISE_PR1 --> API_IMPL[api-implement: Go Controller Updates + UTs]
+         API_IMPL --> REVIEW2[review-and-fix]
+         REVIEW2 --> RAISE_PR2[Raise PR #2]
+     end
+
+     subgraph PR3["Phase 3: E2E Tests"]
+         RAISE_PR2 --> E2E_GEN[e2e-generate: Ginkgo e2e Suite Updates]
+         E2E_GEN --> REVIEW3[review-and-fix]
+         REVIEW3 --> RAISE_PR3[Raise PR #3]
+     end
+
+     subgraph Evaluation["Development Review"]
+         RAISE_PR1 --> EVAL1{Evaluate PR #1}
+         RAISE_PR2 --> EVAL2{Evaluate PR #2}
+         RAISE_PR3 --> EVAL3{Evaluate PR #3}
+
+         EVAL1 --> CI1[Wait for CI]
+         EVAL2 --> CI2[Wait for CI]
+         EVAL3 --> CI3[Wait for CI]
+
+         CI1 -->|Pass| MERGE1[Review PR #1]
+         CI2 -->|Pass| MERGE2[Review PR #2]
+         CI3 -->|Pass| MERGE3[Review PR #3]
+
+         MERGE1 & MERGE2 & MERGE3 --> DONE([Dev Complete])
+     end
+
+     style INIT fill:#e1f5fe
+     style API_GEN fill:#fff3e0
+     style API_TESTS fill:#fff3e0
+     style API_IMPL fill:#e8f5e9
+     style E2E_GEN fill:#fce4ec
+     style REVIEW1 fill:#f3e5f5
+     style REVIEW2 fill:#f3e5f5
+     style REVIEW3 fill:#f3e5f5
+     style DONE fill:#c8e6c9
+```
 
 ## Pre-requisites
 
