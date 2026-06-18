@@ -17,7 +17,7 @@ MAX_COMMITS_PER_RUN="${MAX_COMMITS_PER_RUN:-10}"
 MAX_COMMITS_PER_PR="${MAX_COMMITS_PER_PR:-3}"
 MAX_DIFF_LINES="${MAX_DIFF_LINES:-500}"
 COMMIT_COUNTER_FILE="${RUNNER_TEMP:-/tmp}/pr-agent-commit-count.txt"
-AUDIT_LOG="${RUNNER_TEMP:-/tmp}/pr-agent-audit-${GITHUB_RUN_ID:-local}.jsonl"
+AUDIT_LOG="${RUNNER_TEMP:-/tmp}/pr-agent-audit-${GITHUB_RUN_ID:-${BUILD_ID:-local}}.jsonl"
 
 # ---------------------------------------------------------------------------
 # File blocklist patterns
