@@ -25,7 +25,7 @@ RATE_LIMIT_SECONDS="${RATE_LIMIT_SECONDS:-60}"
 PR_TIMEOUT_SECONDS="${PR_TIMEOUT_SECONDS:-720}"
 DRY_RUN="${DRY_RUN:-false}"
 MONITOR_ONLY="${MONITOR_ONLY:-false}"
-BOT_USER="${BOT_USER:-oape-bot[bot]}"
+BOT_USER="${BOT_USER:-openshift-app-platform-shift-bot}"
 GCSWEB_BASE_URL="${GCSWEB_BASE_URL:-https://gcsweb-ci.apps.ci.l2s4.p1.openshiftapps.com}"
 TEAM_REPOS_CSV="${REPO_ROOT}/deploy/config/team-repos.csv"
 RUNNER_TEMP="${RUNNER_TEMP:-/tmp}"
@@ -403,7 +403,7 @@ apply_trivial_fixes() {
 
   # Configure git identity for the bot
   git config user.name "$BOT_USER"
-  git config user.email "${BOT_USER}@users.noreply.github.com"
+  git config user.email "267347085+${BOT_USER}@users.noreply.github.com"
   git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${owner}/${repo}.git"
 
   # Determine PR base branch for scoping fixes

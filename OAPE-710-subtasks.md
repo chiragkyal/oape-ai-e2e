@@ -5,7 +5,7 @@
 **Status:** To Do
 **Assignee:** Neha Kumari
 
-> **Phase 1 Scope Change (2026-06-10):** Phase 1 is a **GitHub Actions CI monitor** added directly to each target repo. The workflow triggers on GitHub `status` events (fired by Prow on every job completion). Each trigger checks whether all CI checks are done — if not, it exits in seconds with no idle polling. Once all checks are terminal, it clones oape-ai-e2e and runs the analysis scripts to classify failures, query Sippy for flake history, and post a structured report as a PR comment. Phase 1 is **report-only**: no auto-fix, no review comment handling, no Claude dependency. The report includes a machine-readable JSON output with suggested trigger actions for future phases. No container images or Prow configuration required — just a `.yml` workflow file in the target repo.
+> **Phase 1 Scope Change (2026-06-10, updated 2026-06-18 for Prow migration):** Phase 1 is a **Prow presubmit CI monitor** (`oape-ci-monitor`) configured centrally in `openshift/release` for each target repo. The presubmit runs alongside other CI jobs, polls until all checks reach a terminal state, then classifies failures, queries Sippy for flake history, and posts a structured report as a PR comment. Phase 1 is **report-only**: no auto-fix, no review comment handling, no Claude dependency. The report includes a machine-readable JSON output with suggested trigger actions for future phases. The job builds a `ci-monitor-agent` container image inline via ci-operator's `dockerfile_literal` and mounts Prow-managed secrets for GCP and GitHub App credentials. Configuration template: `docs/prow-ci-operator-config.yaml`.
 
 ## Motivation & Goals
 
@@ -15,18 +15,18 @@ OAPE automates the code-generation half of the feature development lifecycle —
 
 This manual loop is both time-consuming and mechanical. Each CI round-trip (fail → read logs → fix → push → wait for CI) takes 15–30 minutes. Trivial failures — formatting, import ordering, missing generated files — account for a large share of CI failures on OAPE-generated code, yet each one requires the same checkout-fix-verify-push cycle. Across multiple PRs and repos, this adds up to hours of wasted developer time per week.
 
-The PR agent closes this gap by automating the post-PR lifecycle as a **GitHub Actions CI job**: CI monitoring, failure triage, trivial auto-fixing, review comment addressing, and status reporting — all running autonomously on a schedule or on-demand.
+The PR agent closes this gap by automating the post-PR lifecycle as a **Prow presubmit CI job**: CI monitoring, failure triage, trivial auto-fixing, review comment addressing, and status reporting — all running autonomously alongside other CI checks or on-demand via `/test oape-ci-monitor`.
 
-### Why GitHub Actions (Not K8s Jobs)
+### Why Prow Presubmit (Not K8s Jobs or GitHub Actions)
 
-The existing OAPE execution model uses K8s Jobs via the go-server for code generation workloads. The PR agent uses GitHub Actions instead because:
+The existing OAPE execution model uses K8s Jobs via the go-server for code generation workloads. The PR agent uses Prow presubmit jobs instead because:
 
-- **Native GitHub event triggers**: GHA natively supports `check_run`, `status`, `workflow_dispatch`, and `repository_dispatch` events — no webhook infrastructure or always-on server required
-- **Ephemeral runners**: No cluster maintenance or pod scheduling overhead; GitHub-hosted runners are provisioned on demand
-- **Proven pattern**: HyperShift's AI-assisted CI jobs (the reference architecture) use GHA successfully at scale
-- **Built-in audit trail**: GHA artifacts provide configurable-retention storage for audit logs and reports
-- **Concurrency control**: GHA `concurrency` groups natively prevent duplicate processing of the same PR
-- The go-server/K8s Job model is optimized for long-running code generation workloads that need specific tools and cluster access — the PR agent's short-lived, event-driven CI monitoring pattern is a better fit for GHA
+- **Native OpenShift CI integration**: Prow presubmits run alongside existing CI jobs in the same infrastructure — no separate runner fleet or workflow files per repo
+- **Centralized configuration**: Job definitions live in `openshift/release` (`ci-operator/config/`), not scattered as `.github/workflows/*.yml` across target repos
+- **Prow secret management**: Secrets (GCP ADC, GitHub App credentials) are mounted from the `test-credentials` namespace — no per-repo GitHub Actions secrets to configure
+- **ci-operator image build**: The `ci-monitor-agent` container is built inline via `dockerfile_literal`, ensuring consistent dependencies across all target repos
+- **ChatOps trigger**: Manually triggerable via `/test oape-ci-monitor` on any PR — no `workflow_dispatch` UI needed
+- The go-server/K8s Job model is optimized for long-running code generation workloads that need specific tools and cluster access — the PR agent's presubmit-driven CI monitoring pattern integrates naturally with OpenShift CI
 
 Human Review Required
 
@@ -48,18 +48,16 @@ BEFORE (manual):
     → Fixes, pushes again
   Total: 2–4 hours of mechanical work
 
-AFTER (with webhook-driven + periodic-pr-agent):
+AFTER (with Prow presubmit ci-monitor):
   Developer opens PR
-    → CI runs and fails
-    → target repo trigger workflow detects failure via check_run/status event
-    → dispatches to on-demand-pr-agent via repository_dispatch
-    → Agent auto-fixes trivial CI failures (fmt, imports, generated files)
-    → Agent verifies fix compiles, commits, pushes
-    → Agent addresses actionable review comments via Claude Code
-    → Agent posts status report as PR comment
-    → periodic-pr-agent sweeps hourly as a fallback
-    → Developer focuses on substantive feedback only
-  Total: Developer spends ~30 min on items that actually need human judgment
+    → CI runs (Prow presubmits fire, including oape-ci-monitor)
+    → oape-ci-monitor polls until all other checks reach terminal state
+    → Agent classifies failures deterministically (regex + Sippy)
+    → Agent posts structured CI analysis report as PR comment
+    → (Phase 2+) Agent auto-fixes trivial CI failures, addresses reviews
+    → Developer sees failure categories, flake rates, and recommended actions
+    → Developer focuses on actionable failures only
+  Total: Developer spends ~10 min triaging CI results instead of reading raw logs
 ```
 
 ### Pain Points & Solutions
@@ -67,7 +65,7 @@ AFTER (with webhook-driven + periodic-pr-agent):
 
 | Pain Point                                 | Impact                         | PR Agent Solution                                                                              |
 | ------------------------------------------ | ------------------------------ | ---------------------------------------------------------------------------------------------- |
-| Repeated manual CI polling                 | Context switching, wasted time | Webhook-driven triggers react instantly to CI failures; periodic job sweeps hourly as fallback |
+| Repeated manual CI polling                 | Context switching, wasted time | Prow presubmit runs alongside CI and reports once all checks complete — no manual polling needed |
 | Fixing lint/format/generated-file failures | 15–30 min per round-trip       | Auto-fix engine applies `go fmt`, `goimports`, `make generate`                                 |
 | Parsing noisy bot comments                 | Signal buried in noise         | Categorizes comments, filters bots, surfaces actionable items only                             |
 | Waiting between CI re-runs                 | Hours of idle-but-blocked time | Agent pushes fixes immediately, compresses feedback loop                                       |
@@ -83,9 +81,9 @@ AFTER (with webhook-driven + periodic-pr-agent):
 | Failure Analysis        | Classifies failures as trivial (auto-fixable) vs. non-trivial (requires human attention) via Claude Code                                                                                               |
 | Auto-Fix Engine         | Runs the correct fix command, verifies compilation, commits and pushes                                                                                                                                 |
 | Review Comment Handling | Analyzes unresolved review threads, addresses actionable feedback via Claude Code                                                                                                                      |
-| Three Trigger Modes     | Target repo trigger workflows (instant CI failure reaction via `check_run`/`status` → `repository_dispatch`) + periodic scanner (cron fallback, all OAPE PRs) + on-demand per-PR (`workflow_dispatch`) |
+| Trigger Modes           | Prow presubmit (automatic on every PR push in configured repos, also triggerable via `/test oape-ci-monitor`)                                                                                          |
 | Safety Guardrails       | File blocklists, commit limits, audit logging, dry-run mode                                                                                                                                            |
-| Status Reporting        | Markdown report posted as PR comment + uploaded as GHA artifact                                                                                                                                        |
+| Status Reporting        | Markdown report posted as PR comment; build logs available in Prow GCS artifacts                                                                                                                       |
 
 
 ### Prior Art: HyperShift AI-Assisted CI Jobs
@@ -97,10 +95,10 @@ Key design parallels with HyperShift:
 
 | Aspect            | HyperShift                              | OAPE PR Agent                                                                                      |
 | ----------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| CI platform       | GitHub Actions                          | GitHub Actions                                                                                     |
+| CI platform       | GitHub Actions                          | Prow presubmit (ci-operator)                                                                       |
 | AI engine         | Claude Code CLI via Vertex AI           | Claude Code CLI via Vertex AI                                                                      |
-| Periodic scanner  | `periodic-review-agent` (every 3h)      | `periodic-pr-agent` (every 1h, weekdays)                                                           |
-| On-demand trigger | `/test address-review-comments`         | Target repo trigger (`check_run`/`status` failure → `repository_dispatch`), or `workflow_dispatch` |
+| Periodic scanner  | `periodic-review-agent` (every 3h)      | N/A (presubmit-driven, no periodic sweep in Phase 1)                                               |
+| On-demand trigger | `/test address-review-comments`         | `/test oape-ci-monitor` (Prow chatops)                                                             |
 | PR scope          | `app/hypershift-jira-solve-ci` PRs only | All open PRs in allowed repos (`team-repos.csv`)                                                   |
 | Max items per run | 10 PRs (review agent)                   | 4 PRs (configurable via `PR_AGENT_MAX_PRS`)                                                        |
 | Max budget per PR | $5.00 per PR                            | $5.00 per PR (configurable via `MAX_BUDGET_PER_PR`, passed to `--max-budget-usd`)                  |
@@ -109,7 +107,7 @@ Key design parallels with HyperShift:
 
 ### Expected Outcome
 
-Once the PR Lifecycle Agent is complete, all open PRs in allowed repos (`team-repos.csv`) will be automatically monitored via lightweight trigger workflows installed in target repos (instant reaction to CI failures via `check_run`/`status` events dispatched to `oape-ai-e2e`) backed by a periodic GitHub Actions sweeper. The agent will fix trivial CI failures, address review comments, and post status reports — all without developer intervention. Developers can also trigger the agent on-demand for any specific PR. The measurable goal is to **eliminate manual trivial-fix round-trips** and reduce time from PR-opened to CI-green from hours to minutes for the common case.
+Once the PR Lifecycle Agent is complete, all open PRs in allowed repos (`team-repos.csv`) will be automatically monitored via a Prow presubmit job (`oape-ci-monitor`) configured centrally in `openshift/release`. The presubmit runs alongside other CI checks and reports once all are terminal. The agent will classify CI failures, post structured analysis reports, and (in later phases) fix trivial CI failures and address review comments — all without developer intervention. Developers can also trigger the agent on-demand via `/test oape-ci-monitor`. The measurable goal is to **eliminate manual trivial-fix round-trips** and reduce time from PR-opened to CI-green from hours to minutes for the common case.
 
 ---
 
@@ -120,7 +118,7 @@ This document breaks the PR Lifecycle Agent into 10 implementable subtasks. Each
 ### Dependency Graph
 
 ```
-Subtask 0 (GHA Infrastructure + Target Repo Triggers)
+Subtask 0 (Prow Presubmit Infrastructure + ci-operator Config)
 ├── Subtask 1 (Entrypoint + PR Discovery + State Tracking)
 │   ├── Subtask 2 (CI Monitoring)
 │   │   └── Subtask 3 (Log Analysis + Deterministic Classification)
@@ -145,35 +143,48 @@ Subtask 0 (GHA Infrastructure + Target Repo Triggers)
 
 | Layer                   | Responsibility                                                                                                                                                                                                                                                                                                                                    | Implementation                                                                            |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| **GitHub Actions YAML** | Workflow triggers (including target repo triggers), runner setup, tool installation, job orchestration                                                                                                                                                                                                                                            | `.github/workflows/*.yml`                                                                 |
+| **Prow ci-operator config** | Presubmit job definition, container image build (`ci-monitor-agent`), secret mounts, resource requests, timeout configuration                                                                                                                                                                                                                | `docs/prow-ci-operator-config.yaml` (template); actual config in `openshift/release`     |
 | **Bash scripts**        | PR discovery, CI status polling, deterministic failure classification, safety guardrails, audit logging, reporting. Pipeline scripts are **standalone executables** communicating via JSON files in `$RUNNER_TEMP`. `safety.sh` is a **sourced utility library** providing shared functions (blocklist, audit log, retry helper, commit counter). | `scripts/pr-agent/*.sh`                                                                   |
 | **Claude Code CLI**     | Fallback failure classification (for `unknown` categories), review comment analysis/response, complex code fixes. Skills included via `cat` in the prompt.                                                                                                                                                                                        | `plugins/oape/skills/*.md` content injected via `claude --print -p "$(cat SKILL.md) ..."` |
 
 
+### Two-Layer Classification Taxonomy
+
+The system uses two classification layers that serve different purposes:
+
+| Layer | Script | Categories | Purpose |
+| ----- | ------ | ---------- | ------- |
+| **Job-level (triage)** | `scripts/ci-monitor/monitor.sh` | `install-failure`, `build-failure`, `lint-failure`, `test-failure`, `infra-flake`, `unknown` | Classifies CI job failures for reporting and triage. Maps to high-level actions: `retest`, `auto-fix-lint`, `investigate`. |
+| **Fix-level (actionable)** | `scripts/pr-agent/entrypoint.sh` | `trivial-format`, `trivial-import`, `trivial-lint`, `trivial-generated-files`, `build-error`, `test-failure`, `infra-flake`, `unknown` | Classifies failures by the specific fix command needed: `go fmt`, `goimports`, `make generate`, etc. |
+
+`dispatch.sh` bridges the two layers: it reads `monitor.sh`'s job-level classification (e.g., `lint-failure` → `auto-fix-lint` action) and invokes the appropriate `pr-agent/` script, which performs the finer-grained fix-level classification to determine the exact fix command.
+
+
 ---
 
-## Subtask 0: GitHub Actions CI infrastructure
+## Subtask 0: Prow presubmit infrastructure and ci-operator configuration
 
 ### Description
 
-Establish the GitHub Actions workflow infrastructure that all subsequent subtasks build upon. This includes the workflow YAML skeletons for both execution modes (periodic and on-demand), authentication setup for GitHub App tokens and Claude API via Vertex AI, tool installation steps (Go, goimports, golangci-lint, Claude Code CLI), and runner configuration.
+Establish the Prow presubmit job infrastructure that all subsequent subtasks build upon. This includes the ci-operator config snippet that defines the `ci-monitor-agent` container image (built inline via `dockerfile_literal`) and the `oape-ci-monitor` presubmit test step. The config is added to each target repo's ci-operator config in `openshift/release`.
 
-> **Phase 1 implementation:** A single `periodic-pr-agent.yml` workflow supports three triggers: `pull_request: [opened, synchronize]` for auto-triggering on new PRs in this repo, `workflow_dispatch` with a `pr_url` input for on-demand single-PR monitoring, and cron for the periodic sweep (active but unused in Phase 1). The workflow selects on-demand + `--monitor-only` mode when triggered by a PR event or when `pr_url` is provided, and periodic mode otherwise.
+> **Phase 1 implementation:** A single `oape-ci-monitor` presubmit job runs as `always_run: true, optional: true` alongside other CI jobs. It polls until all other checks reach a terminal state, then runs `monitor.sh` and `dispatch.sh`. Manually triggerable via `/test oape-ci-monitor`.
 
 ### Acceptance Criteria
 
-1. Four workflow YAML files exist and are syntactically valid:
-  - `.github/workflows/pr-agent-shared.yml` — reusable workflow (`workflow_call`) containing shared setup, tool installation, auth, agent execution, and artifact upload.
-  - `.github/workflows/periodic-pr-agent.yml` — triggered by cron schedule; calls `pr-agent-shared`.
-  - `.github/workflows/on-demand-pr-agent.yml` — triggered by `workflow_dispatch` and `repository_dispatch`; calls `pr-agent-shared`.
-  - `.github/workflows/oape-pr-agent-trigger.yml` — **lightweight trigger workflow installed in each target repo**. Listens for CI failure events (`check_run` for GitHub Actions, `status` for Prow/OpenShift CI) and dispatches to `oape-ai-e2e` via `repository_dispatch` or `gh workflow run`.
-2. The shared reusable workflow installs: Go toolchain, `gh` CLI, `goimports`, `golangci-lint`, and Claude Code CLI.
-3. Authentication is configured:
-  - GitHub App token generated via `actions/create-github-app-token` for push operations (avoids `GITHUB_TOKEN` anti-recursion limitation).
-  - Claude API access via Vertex AI using GCP Workload Identity Federation (`google-github-actions/auth@v2`). No service account keys are stored as secrets.
-4. Runner configuration uses `ubuntu-latest` with `timeout-minutes: 55` to stay within the 1-hour GitHub App token TTL.
-5. All workflows can be triggered manually via `workflow_dispatch` for testing.
-6. Target repo trigger workflow correctly handles both Prow (`status` event) and GitHub Actions (`check_run` event) CI failures for any open PR in the repo.
+1. A reference ci-operator config exists at `docs/prow-ci-operator-config.yaml` with three snippets:
+  - Inline `ci-monitor-agent` image build under `images.items[]`
+  - Promotion exclusion under `promotion.to[].excluded_images`
+  - Presubmit test definition under `tests[]`
+2. The `ci-monitor-agent` image is built from `registry.access.redhat.com/ubi9/go-toolset` and installs: `git`, `make`, `jq`, `gh` CLI. It clones `oape-ai-e2e` at build time and copies scripts/plugins/config into the image. It installs `goimports` and `golangci-lint`.
+3. The presubmit job is defined as `always_run: true, optional: true` with job name `oape-ci-monitor`.
+4. Authentication is configured with a fallback strategy:
+  - **Primary:** GitHub App installation token generated inline via JWT signing from the PEM key mounted at `/var/run/github-app/private-key.pem` (secret: `openshift-app-platform-shift-github-bot` in `test-credentials` namespace). Required for Phase 2+ auto-fix pushes that must trigger downstream CI.
+  - **Fallback:** If the GitHub App is not installed on the target repo, falls back to `GITHUB_TOKEN` (Prow-provided). Sufficient for Phase 1 (read + comment only). Logs a warning with instructions to install the App for Phase 2+.
+  - Claude API access via GCP Application Default Credentials mounted at `/var/run/gcloud-adc/application_default_credentials.json` (secret: `oap-lts-claude-gcp-vertex-sa` in `test-credentials` namespace).
+5. Job timeout is set to `2h30m0s`. Resource requests: 1 CPU, 500Mi memory.
+6. The test step invokes `/app/scripts/ci-monitor/monitor.sh` followed by `/app/scripts/ci-monitor/dispatch.sh`.
+7. Manually triggerable via `/test oape-ci-monitor` on any PR in a configured target repo.
 
 ### Dependencies
 
@@ -181,219 +192,138 @@ None — this is the foundation subtask.
 
 ### Implementation Hints
 
-- **Periodic workflow skeleton** (calls the shared reusable workflow):
+- **ci-operator config template** (`docs/prow-ci-operator-config.yaml`):
+  The config contains three snippets to add to the target repo's ci-operator config in `openshift/release` at `ci-operator/config/REPO_ORG/REPO_NAME/REPO_ORG-REPO_NAME-BRANCH.yaml`:
+
+  1. **Inline image build** — builds the `ci-monitor-agent` container:
   ```yaml
-  name: periodic-pr-agent
-  on:
-    schedule:
-      - cron: '0 8-23 * * 1-5'  # Every hour, weekdays, 8:00–23:00 UTC (switch to /3 after target repo triggers in Phase 3)
-    workflow_dispatch:
-      inputs:
-        dry_run:
-          type: boolean
-          default: false
-          description: 'Run in dry-run mode (no file modifications)'
-
-  concurrency:
-    group: pr-agent-periodic
-    cancel-in-progress: false
-
-  jobs:
-    pr-agent:
-      uses: ./.github/workflows/pr-agent-shared.yml
-      with:
-        mode: periodic
-        dry_run: ${{ inputs.dry_run || false }}
-      secrets: inherit
+  images:
+    items:
+    - dockerfile_literal: |-
+        FROM registry.access.redhat.com/ubi9/go-toolset
+        USER 0
+        RUN dnf install -y git make jq && \
+            dnf install -y 'dnf-command(config-manager)' && \
+            dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo && \
+            dnf install -y gh && \
+            dnf clean all
+        WORKDIR /app
+        RUN git clone --depth 1 -b main https://github.com/openshift-eng/oape-ai-e2e.git /tmp/oape && \
+            cp -r /tmp/oape/scripts /app/scripts && \
+            cp -r /tmp/oape/plugins /plugins && \
+            mkdir -p /config && cp -r /tmp/oape/deploy/config/* /config/ && \
+            rm -rf /tmp/oape
+        RUN go install golang.org/x/tools/cmd/goimports@latest && \
+            curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b /usr/local/bin
+        RUN git config --global user.name "openshift-app-platform-shift-bot" && \
+            git config --global user.email "267347085+openshift-app-platform-shift-bot@users.noreply.github.com"
+        RUN chmod -R g=u /opt/app-root/src
+        USER 1001
+      to: ci-monitor-agent
   ```
-- **On-demand workflow skeleton** (accepts PR URL via `workflow_dispatch` or `repository_dispatch` from target repos):
-  ```yaml
-  name: on-demand-pr-agent
-  concurrency:
-    group: pr-agent-on-demand-${{ github.event.client_payload.pr_url || inputs.pr_url || github.run_id }}
-    cancel-in-progress: false
-  on:
-    workflow_dispatch:
-      inputs:
-        pr_url:
-          required: true
-          description: 'Full PR URL (https://github.com/org/repo/pull/123)'
-        dry_run:
-          type: boolean
-          default: false
-    repository_dispatch:
-      types: [pr-agent-trigger]
-      # Payload: { "pr_url": "https://github.com/org/repo/pull/123" }
 
-  jobs:
-    pr-agent:
-      uses: ./.github/workflows/pr-agent-shared.yml
-      with:
-        mode: on-demand
-        pr_url: ${{ github.event.client_payload.pr_url || inputs.pr_url }}
-        dry_run: ${{ inputs.dry_run || false }}
-      secrets: inherit
-  ```
-- **Target repo trigger workflow** (`oape-pr-agent-trigger.yml` — installed in each target repo):
+  2. **Presubmit test step** — runs the CI monitor:
   ```yaml
-  # Lightweight workflow installed in target repos (cert-manager-operator, etc.)
-  # Detects CI failures on any open PR and dispatches to oape-ai-e2e for processing.
-  name: oape-pr-agent-trigger
-  on:
-    # GitHub Actions CI failures
-    check_run:
-      types: [completed]
-    # Prow / OpenShift CI failures (uses Status API, not Checks API)
-    status: {}
+  - always_run: true
+    as: oape-ci-monitor
+    optional: true
+    steps:
+      test:
+      - as: monitor
+        commands: |
+          set -euo pipefail
 
-  jobs:
-    dispatch:
-      # Fire on CI failures for any open PR in this repo
-      if: >
-        (github.event_name == 'check_run' &&
-         github.event.check_run.conclusion == 'failure') ||
-        (github.event_name == 'status' &&
-         github.event.state == 'failure')
-      runs-on: ubuntu-latest
-      steps:
-        - name: Find PR for commit
-          id: find-pr
-          env:
-            GH_TOKEN: ${{ github.token }}
-          run: |
-            # Extract commit SHA from event
-            if [[ "${{ github.event_name }}" == "check_run" ]]; then
-              SHA="${{ github.event.check_run.head_sha }}"
+          echo "[setup] Starting oape-ci-monitor for ${REPO_OWNER}/${REPO_NAME} PR#${PULL_NUMBER}"
+
+          # --- GitHub auth: try App token, fall back to GITHUB_TOKEN ---
+          # App token is preferred (required for Phase 2+ pushes that trigger CI).
+          # For Phase 1 (report-only), GITHUB_TOKEN is sufficient for read + comment.
+          USE_APP_TOKEN="false"
+          if [[ -f /var/run/github-app/app-id && -f /var/run/github-app/private-key.pem ]]; then
+            echo "[auth] Attempting GitHub App token..."
+            APP_ID=$(cat /var/run/github-app/app-id)
+            PEM_PATH="/var/run/github-app/private-key.pem"
+            HEADER=$(printf '{"alg":"RS256","typ":"JWT"}' | openssl base64 -e -A | tr '+/' '-_' | tr -d '=')
+            NOW=$(date +%s); EXP=$((NOW + 300))
+            PAYLOAD=$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' "$NOW" "$EXP" "$APP_ID" | openssl base64 -e -A | tr '+/' '-_' | tr -d '=')
+            SIGNATURE=$(printf '%s' "${HEADER}.${PAYLOAD}" | openssl dgst -sha256 -sign "$PEM_PATH" -binary | openssl base64 -e -A | tr '+/' '-_' | tr -d '=')
+            JWT="${HEADER}.${PAYLOAD}.${SIGNATURE}"
+
+            INSTALL_RESPONSE=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer ${JWT}" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/installation")
+            HTTP_CODE=$(echo "$INSTALL_RESPONSE" | tail -1)
+            INSTALL_BODY=$(echo "$INSTALL_RESPONSE" | sed '$d')
+
+            if [[ "$HTTP_CODE" -eq 200 ]]; then
+              INST_ID=$(echo "$INSTALL_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+              TOKEN_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST -H "Authorization: Bearer ${JWT}" -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/app/installations/${INST_ID}/access_tokens")
+              T_CODE=$(echo "$TOKEN_RESPONSE" | tail -1)
+              T_BODY=$(echo "$TOKEN_RESPONSE" | sed '$d')
+              if [[ "$T_CODE" -eq 201 ]]; then
+                export GH_TOKEN=$(echo "$T_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
+                USE_APP_TOKEN="true"
+                echo "[auth] GitHub App token generated successfully"
+              else
+                echo "[auth] WARN: App token creation failed (HTTP ${T_CODE}), falling back to GITHUB_TOKEN"
+              fi
             else
-              SHA="${{ github.event.sha }}"
+              echo "[auth] WARN: App not installed on ${REPO_OWNER}/${REPO_NAME} (HTTP ${HTTP_CODE}), falling back to GITHUB_TOKEN"
             fi
+          else
+            echo "[auth] GitHub App credentials not mounted, using GITHUB_TOKEN"
+          fi
 
-            # Find open PR for this commit
-            PR_URL=$(gh pr list --repo "${{ github.repository }}" \
-              --state open \
-              --json url,headRefOid \
-              --jq ".[] | select(.headRefOid == \"${SHA}\") | .url" \
-              | head -1)
-
-            if [[ -n "$PR_URL" ]]; then
-              echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
-              echo "Found OAPE PR: $PR_URL"
-            else
-              echo "No OAPE PR found for commit $SHA"
+          if [[ "$USE_APP_TOKEN" != "true" ]]; then
+            if [[ -z "${GH_TOKEN:-}" && -z "${GITHUB_TOKEN:-}" ]]; then
+              echo "[auth] ERROR: No GitHub token available (App token failed and GITHUB_TOKEN not set)" >&2
+              exit 1
             fi
+            export GH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN}}"
+            echo "[auth] Using GITHUB_TOKEN (Phase 1 report-only — sufficient for read + comment)"
+            echo "[auth] NOTE: Phase 2+ auto-fix pushes require the GitHub App to be installed on ${REPO_OWNER}/${REPO_NAME}"
+          fi
 
-        - name: Dispatch to oape-ai-e2e
-          if: steps.find-pr.outputs.pr_url != ''
-          env:
-            GH_TOKEN: ${{ secrets.OAPE_DISPATCH_TOKEN }}
-          run: |
-            gh api repos/openshift-eng/oape-ai-e2e/dispatches \
-              -f event_type=pr-agent-trigger \
-              -f client_payload[pr_url]="${{ steps.find-pr.outputs.pr_url }}"
-  ```
-  > **Note:** The target repo trigger workflow requires a `OAPE_DISPATCH_TOKEN` secret
-  > with `repo` scope on `openshift-eng/oape-ai-e2e` to send `repository_dispatch` events.
-  > Alternatively, the OAPE GitHub App token can be used if the App has dispatch permissions.
-- **Tool setup script** (`scripts/pr-agent/setup-tools.sh`):
-  ```bash
-  #!/usr/bin/env bash
-  set -euo pipefail
-  # Go is pre-installed on ubuntu-latest
-  go install golang.org/x/tools/cmd/goimports@latest
-  curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b "$(go env GOPATH)/bin"
-  # Claude Code CLI (installed via npm)
-  npm install -g @anthropic-ai/claude-code
-  ```
-- **GitHub App token** is required instead of `GITHUB_TOKEN` because pushes made with `GITHUB_TOKEN` do not trigger downstream CI runs (GitHub's anti-recursion rule). A GitHub App token sidesteps this limitation.
-- **Reference:** HyperShift uses `actions/create-github-app-token@v1` with a dedicated GitHub App for the same reason.
-- **Reusable workflow** for shared setup (`pr-agent-shared.yml`):
-  ```yaml
-  name: PR Agent Shared Setup
-  on:
-    workflow_call:
-      inputs:
-        mode:
-          type: string
-          required: true
-          description: 'periodic or on-demand'
-        pr_url:
-          type: string
-          required: false
-          description: 'PR URL (required for on-demand mode)'
-        dry_run:
-          type: boolean
-          default: false
-      secrets:
-        OAPE_APP_ID:
-          required: true
-        OAPE_APP_PRIVATE_KEY:
-          required: true
-        GCP_WORKLOAD_IDENTITY_PROVIDER:
-          required: true
-        GCP_SERVICE_ACCOUNT:
-          required: true
-        GCP_PROJECT_ID:
-          required: true
+          # --- GCP auth for Claude (Vertex AI) ---
+          export GOOGLE_APPLICATION_CREDENTIALS="/var/run/gcloud-adc/application_default_credentials.json"
+          export CLAUDE_CODE_USE_VERTEX="1"
+          export CLOUD_ML_REGION="global"
+          export ANTHROPIC_VERTEX_PROJECT_ID="itpc-gcp-hcm-pe-eng-claude"
 
-  jobs:
-    pr-agent:
-      runs-on: ubuntu-latest
-      timeout-minutes: 55
-      steps:
-        - uses: actions/checkout@v4
-        - name: Generate GitHub App Token
-          id: app-token
-          uses: actions/create-github-app-token@v1
-          with:
-            app-id: ${{ secrets.OAPE_APP_ID }}
-            private-key: ${{ secrets.OAPE_APP_PRIVATE_KEY }}
-        - name: Authenticate to GCP (Workload Identity Federation)
-          uses: google-github-actions/auth@v2
-          with:
-            workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-            service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-        - name: Setup Tools
-          run: scripts/pr-agent/setup-tools.sh
-        - name: Run PR Agent
-          env:
-            GH_TOKEN: ${{ steps.app-token.outputs.token }}
-            CLAUDE_CODE_USE_VERTEX: '1'
-            CLOUD_ML_REGION: global
-            ANTHROPIC_VERTEX_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-            DRY_RUN: ${{ inputs.dry_run }}
-          run: |
-            if [[ "${{ inputs.mode }}" == "on-demand" ]]; then
-              scripts/pr-agent/entrypoint.sh --mode on-demand --pr-url "${{ inputs.pr_url }}"
-            else
-              scripts/pr-agent/entrypoint.sh --mode periodic
-            fi
-        - name: Upload Audit Log
-          if: always()
-          uses: actions/upload-artifact@v4
-          with:
-            name: pr-agent-audit-${{ github.run_id }}
-            path: ${{ runner.temp }}/pr-agent-audit-*.jsonl
-            retention-days: 30
-        - name: Upload Reports
-          if: always()
-          uses: actions/upload-artifact@v4
-          with:
-            name: pr-agent-reports-${{ github.run_id }}
-            path: ${{ runner.temp }}/pr-agent-report-*.md
-            retention-days: 30
+          # --- Run CI monitor ---
+          export PR_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/pull/${PULL_NUMBER}"
+          export SKIP_POLL="false"
+          export SELF_JOB_NAME="oape-ci-monitor"
+          export BUILD_ID="${BUILD_ID:-}"
+          export OAPE_RUN_URL="${BUILD_LOG_URL:-}"
+
+          gh auth setup-git
+          /app/scripts/ci-monitor/monitor.sh
+          /app/scripts/ci-monitor/dispatch.sh
+        credentials:
+        - mount_path: /var/run/gcloud-adc
+          name: oap-lts-claude-gcp-vertex-sa
+          namespace: test-credentials
+        - mount_path: /var/run/github-app
+          name: openshift-app-platform-shift-github-bot
+          namespace: test-credentials
+        from: ci-monitor-agent
+        resources:
+          requests:
+            cpu: "1"
+            memory: 500Mi
+        timeout: 2h30m0s
   ```
-  Both `periodic-pr-agent.yml` and `on-demand-pr-agent.yml` call this reusable workflow instead of duplicating setup steps.
+
+- **GitHub App token** is preferred over `GITHUB_TOKEN` because pushes made with `GITHUB_TOKEN` do not trigger downstream CI runs (GitHub's anti-recursion rule). The Prow job attempts to generate the App token inline via JWT signing from the mounted PEM key. If the App is not installed on the target repo, it falls back to `GITHUB_TOKEN` which is sufficient for Phase 1 (read + comment only). Phase 2+ auto-fix pushes require the App to be installed.
+- **Rollout**: To add the CI monitor to a target repo, copy the three snippets from `docs/prow-ci-operator-config.yaml` into the target repo's ci-operator config in `openshift/release` and submit a PR.
 
 ### Files
 
 
-| File                                          | Action                                                                          |
-| --------------------------------------------- | ------------------------------------------------------------------------------- |
-| `.github/workflows/pr-agent-shared.yml`       | Create (reusable workflow with shared setup)                                    |
-| `.github/workflows/periodic-pr-agent.yml`     | Create (calls pr-agent-shared)                                                  |
-| `.github/workflows/on-demand-pr-agent.yml`    | Create (accepts workflow_dispatch + repository_dispatch, calls pr-agent-shared) |
-| `.github/workflows/oape-pr-agent-trigger.yml` | Create (lightweight trigger workflow template for installation in target repos) |
-| `scripts/pr-agent/setup-tools.sh`             | Create                                                                          |
+| File                                | Action                                                               |
+| ----------------------------------- | -------------------------------------------------------------------- |
+| `docs/prow-ci-operator-config.yaml` | Create (reference ci-operator config for target repos)               |
 
 
 ---
@@ -411,7 +341,7 @@ Create the main bash entrypoint script that orchestrates the PR agent workflow. 
 1. Entrypoint script accepts `--mode` flag with values `periodic` or `on-demand`.
 2. In `periodic` mode:
   - Queries GitHub for all open PRs across repos listed in `deploy/config/team-repos.csv`.
-  - Processes up to `PR_AGENT_MAX_PRS` (default 4) PRs per run. Kept low to ensure the run completes within the GitHub App token's 1-hour TTL.
+  - Processes up to `PR_AGENT_MAX_PRS` (default 4) PRs per run. Kept low to ensure the run completes within the Prow job timeout (`2h30m0s`).
   - Adds a 60-second delay between processing each PR (rate limiting).
 3. In `on-demand` mode:
   - Accepts `--pr-url <URL>` argument.
@@ -426,13 +356,13 @@ Create the main bash entrypoint script that orchestrates the PR agent workflow. 
   - Required environment variables are set (`GH_TOKEN`, `CLAUDE_CODE_USE_VERTEX`).
 7. Fails immediately with a clear, prefixed error message (e.g., `PRECHECK FAILED: PR #123 is not open`) when any precheck fails.
 8. Emits structured log lines to stdout for each PR processed: `[PR #N] owner/repo#123 — processing started`.
-9. Stays within 1-hour token TTL: GitHub App tokens expire after 1 hour. The periodic run limits `PR_AGENT_MAX_PRS` to 4 (default) to ensure processing completes within this window. The GHA job timeout is set to 55 minutes (`timeout-minutes: 55`) as a safety net.
-10. Maintains lightweight state persistence to avoid re-processing: tracks which CI jobs have been analyzed and which review comments have been addressed. State is persisted **across GHA runs** by embedding a hidden state block in the PR report comment: `<!-- oape-pr-agent-state:BASE64_ENCODED_JSON -->`. The state schema includes `analyzed` (array of `name:url` job keys — URL changes after `/retest`, ensuring re-runs get fresh analysis), `addressed` (array of comment IDs), and `last_run` (ISO timestamp). On each run, the agent reads the existing report comment, parses the embedded state, and skips already-processed jobs and comments. Within a run, an in-memory copy in `$RUNNER_TEMP/pr-agent-state-<owner>-<repo>-<pr-number>.json` prevents duplicate work across multiple PRs.
+9. Stays within Prow job timeout: The Prow presubmit timeout is `2h30m0s`. The GitHub App installation token is generated inline at job start and is valid for 1 hour, which is sufficient for single-PR presubmit processing. The periodic run limits `PR_AGENT_MAX_PRS` to 4 (default) to ensure processing completes within this window.
+10. Maintains lightweight state persistence to avoid re-processing: tracks which CI jobs have been analyzed and which review comments have been addressed. State is persisted **across job runs** by embedding a hidden state block in the PR report comment: `<!-- oape-pr-agent-state:BASE64_ENCODED_JSON -->`. The state schema includes `analyzed` (array of `name:url` job keys — URL changes after `/retest`, ensuring re-runs get fresh analysis), `addressed` (array of comment IDs), and `last_run` (ISO timestamp). On each run, the agent reads the existing report comment, parses the embedded state, and skips already-processed jobs and comments. Within a run, an in-memory copy in `$RUNNER_TEMP/pr-agent-state-<owner>-<repo>-<pr-number>.json` prevents duplicate work across multiple PRs.
 11. Wraps `gh` API calls in a retry helper function with exponential backoff (3 retries at 5s/15s/45s intervals) for resilience against transient GitHub API failures.
 
 ### Dependencies
 
-Subtask 0 (GHA infrastructure must exist).
+Subtask 0 (Prow presubmit infrastructure must exist).
 
 ### Implementation Hints
 
@@ -808,9 +738,9 @@ Subtask 7 (safety guardrails must be enforced before any file modification).
     cd "$workdir"
     gh pr checkout "$pr_number"
 
-    # Configure git identity for the bot
-    git config user.name "oape-bot[bot]"
-    git config user.email "oape-bot[bot]@users.noreply.github.com"
+    # Configure git identity for the bot (matches the GitHub App identity)
+    git config user.name "openshift-app-platform-shift-bot"
+    git config user.email "267347085+openshift-app-platform-shift-bot@users.noreply.github.com"
     git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${owner}/${repo}.git"
 
     while read -r fix; do
@@ -913,7 +843,7 @@ Subtask 7 (safety guardrails must be enforced before any file modification).
     done < <(jq -c '.[] | select(.category | startswith("trivial-"))' "$analysis_file")
   }
   ```
-- **GitHub App token for push:** The token from `actions/create-github-app-token` is set as `GH_TOKEN` and also used for git push via:
+- **GitHub App token for push:** The token generated via JWT signing from the Prow-mounted PEM key is set as `GH_TOKEN` and also used for git push via:
   ```bash
   git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${owner}/${repo}.git"
   ```
@@ -1182,7 +1112,7 @@ Define and enforce safety boundaries for the autonomous agent. Since the agent c
 4. Logs every action to a structured audit log (JSON lines format) at `$RUNNER_TEMP/pr-agent-audit-<run-id>.jsonl` including: timestamp, PR URL, action type, affected files, commit SHA (if applicable), and outcome.
 5. `DRY_RUN=true` mode executes the full analysis pipeline but skips all file modifications, commits, and pushes. Reports what *would* have been done.
 6. Diff size guard: if an auto-fix produces more than 500 lines of changes, abort and report.
-7. Audit log is uploaded as a GitHub Actions artifact (30-day retention) at the end of every run.
+7. Audit log is available in Prow GCS artifacts at the end of every run.
 
 ### Dependencies
 
@@ -1287,7 +1217,7 @@ None — this is a standalone utility module. Its functions are consumed by Subt
 
 ### Description
 
-Build the reporting layer that gives developers clear visibility into what the agent did. The agent produces a structured markdown report and posts it as a PR comment, so developers see results directly in the PR conversation. The report is also uploaded as a GitHub Actions artifact for archival. Following HyperShift's pattern, the report includes token/cost tracking data.
+Build the reporting layer that gives developers clear visibility into what the agent did. The agent produces a structured markdown report and posts it as a PR comment, so developers see results directly in the PR conversation. The report is also available in Prow GCS artifacts for archival. Following HyperShift's pattern, the report includes token/cost tracking data.
 
 ### Acceptance Criteria
 
@@ -1302,7 +1232,7 @@ Build the reporting layer that gives developers clear visibility into what the a
   - **Run Summary:** total time elapsed, commit count. (Claude API costs are tracked at the GCP project billing level via Vertex AI, not per-invocation.)
 2. Each auto-fix entry includes a clickable link to the commit on GitHub (`https://github.com/{owner}/{repo}/commit/{sha}`).
 3. Report is posted as a PR comment via `gh pr comment`. If a previous agent comment exists, it is updated (not duplicated).
-4. Report is saved to `$RUNNER_TEMP/pr-agent-report-<owner>-<repo>-<pr-number>.md` and uploaded as a GHA artifact.
+4. Report is saved to `$RUNNER_TEMP/pr-agent-report-<owner>-<repo>-<pr-number>.md` and available in Prow GCS artifacts.
 5. When `DRY_RUN=true`, the report clearly states it was a dry run and no changes were made.
 6. Before pushing any auto-fixes, posts an "in progress" comment (or updates the existing report comment with a "Processing..." header) so developers see context before surprise commits appear on the branch. The final report replaces this in-progress state.
 7. On agent crash or failure, a `trap` handler posts a brief error note to the PR comment so developers know the agent attempted but failed.
@@ -1343,7 +1273,7 @@ Subtasks 2–7 (aggregates data from all other capabilities).
 
   **PR:** [${title}](${url})
   **Branch:** \`${head}\` → \`${base}\`
-  **Run:** [GHA #${GITHUB_RUN_ID:-N/A}](https://github.com/${GITHUB_REPOSITORY:-}/actions/runs/${GITHUB_RUN_ID:-})
+  **Run:** [${OAPE_RUN_URL:-Build #${BUILD_ID:-N/A}}](${OAPE_RUN_URL:-#})
   **Mode:** ${PR_AGENT_MODE:-periodic}
   ${DRY_RUN:+**DRY RUN — no changes were made**}
 
@@ -1367,7 +1297,7 @@ Subtasks 2–7 (aggregates data from all other capabilities).
   ```
 - **Post as PR comment (update if exists):**
   ```bash
-  Fire on CI failures for any open PR in this repopost_status_comment() {
+  post_status_comment() {
     local owner="$1" repo="$2" pr_number="$3"
     local report_file="${RUNNER_TEMP}/pr-agent-report-${owner}-${repo}-${pr_number}.md"
     local marker="<!-- oape-pr-agent-report -->"
@@ -1386,7 +1316,7 @@ Subtasks 2–7 (aggregates data from all other capabilities).
       fi
     fi
 
-    # Embed cross-run state in the comment for persistence across GHA runs
+    # Embed cross-run state in the comment for persistence across job runs
     local state_file="${RUNNER_TEMP}/pr-agent-state-${owner}-${repo}-${pr_number}.json"
     local state_block=""
     if [[ -f "$state_file" ]]; then
@@ -1432,10 +1362,7 @@ Add automated testing for the PR agent itself. Since the agent autonomously push
   - Runs the full agent pipeline in `DRY_RUN=true` mode.
   - Verifies: PR discovery finds the test PR, CI status is fetched, failure analysis produces valid JSON, report is generated (but not posted).
   - Exits with a non-zero status if any phase fails.
-3. A **CI validation workflow** (`.github/workflows/pr-agent-test.yml`) runs on every push and PR to this repo:
-  - Runs shellcheck on all `scripts/pr-agent/*.sh` files.
-  - Runs the dry-run integration test.
-  - Validates workflow YAML syntax.
+3. A **CI validation target** (Makefile or Prow presubmit) runs shellcheck on all `scripts/pr-agent/*.sh` and `scripts/ci-monitor/*.sh` files and executes the dry-run integration test.
 4. Test scripts themselves follow shellcheck-clean conventions.
 
 ### Dependencies
@@ -1469,18 +1396,11 @@ Subtasks 0–8 (all agent components must exist before they can be tested).
 
   echo "PASS: Dry-run integration test completed successfully"
   ```
-- **Workflow YAML validation:**
-  ```bash
-  # Use actionlint for GHA workflow syntax validation
-  actionlint .github/workflows/periodic-pr-agent.yml .github/workflows/on-demand-pr-agent.yml
-  ```
-
 ### Files
 
 
 | File                                  | Action |
 | ------------------------------------- | ------ |
-| `.github/workflows/pr-agent-test.yml` | Create |
 | `scripts/pr-agent/test-dry-run.sh`    | Create |
 
 
@@ -1490,7 +1410,7 @@ Subtasks 0–8 (all agent components must exist before they can be tested).
 
 ### Description
 
-Create a Claude Code command that serves as the **interactive/developer** entry point for the PR agent, following the pattern of all existing OAPE commands (`/oape:review`, `/oape:init`, etc.). This command is for developers running the agent locally in their terminal — the GHA workflow calls `scripts/pr-agent/entrypoint.sh` directly (deterministic, no Claude orchestration overhead). This separation ensures the CI path is fast and predictable, while the interactive path provides a richer developer experience.
+Create a Claude Code command that serves as the **interactive/developer** entry point for the PR agent, following the pattern of all existing OAPE commands (`/oape:review`, `/oape:init`, etc.). This command is for developers running the agent locally in their terminal — the Prow presubmit invokes `monitor.sh` and `dispatch.sh` directly (deterministic, no Claude orchestration overhead). This separation ensures the CI path is fast and predictable, while the interactive path provides a richer developer experience.
 
 ### Acceptance Criteria
 
@@ -1498,9 +1418,9 @@ Create a Claude Code command that serves as the **interactive/developer** entry 
 2. Accepts a PR URL as the primary argument.
 3. Supports flags: `--dry-run` (no modifications), `--auto-fix` (default true).
 4. Prompts the user before pushing fixes, displays status inline, and offers to monitor the PR on a schedule (via `CronCreate`).
-5. Delegates to the same bash scripts (`ci-monitor.sh`, `auto-fix.sh`, etc.) used by the GHA workflow, ensuring parity between interactive and CI execution.
+5. Delegates to the same bash scripts (`ci-monitor.sh`, `auto-fix.sh`, etc.) used by the Prow presubmit, ensuring parity between interactive and CI execution.
 6. The CLAUDE.md command table is updated to include `/oape:pr-agent`.
-7. **Note:** The GHA workflow (`pr-agent-shared.yml`) calls `scripts/pr-agent/entrypoint.sh` directly — it does NOT invoke this command. This command is for developer use only.
+7. **Note:** The Prow presubmit invokes `monitor.sh` and `dispatch.sh` directly — it does NOT invoke this command. This command is for developer use only.
 
 ### Dependencies
 
@@ -1520,7 +1440,7 @@ Subtasks 1–8 (the command wraps all existing capabilities).
   After the initial pass, offer: "Would you like me to keep monitoring this PR?"
   If yes, schedule a one-shot CronCreate to re-run the analysis in 5 minutes.
   ```
-- **GHA path is separate:** The GHA workflow (`pr-agent-shared.yml`) calls `scripts/pr-agent/entrypoint.sh` directly — it does not use this command. This keeps the CI path deterministic and avoids Claude orchestration overhead.
+- **Prow path is separate:** The Prow presubmit invokes `monitor.sh` and `dispatch.sh` directly — it does not use this command. This keeps the CI path deterministic and avoids Claude orchestration overhead.
 
 ### Files
 
@@ -1539,78 +1459,47 @@ Subtasks 1–8 (the command wraps all existing capabilities).
 
 | System              | Method                                         | Details                                                                                                                                                                                        |
 | ------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| GitHub (read/write) | GitHub App token                               | Generated via `actions/create-github-app-token@v1`. Required for push (avoids `GITHUB_TOKEN` anti-recursion). App needs `contents: write`, `pull-requests: write`, `checks: read` permissions. |
-| Claude API          | GCP Workload Identity Federation via Vertex AI | `CLAUDE_CODE_USE_VERTEX=1`, `ANTHROPIC_VERTEX_PROJECT_ID`. Authentication via `google-github-actions/auth@v2` using Workload Identity Federation (no service account key needed).              |
-| GitHub (CI logs)    | Same GitHub App token                          | Used via `gh` CLI for `gh run view --log-failed` and `gh api` calls.                                                                                                                           |
+| GitHub (read/write) | GitHub App token with `GITHUB_TOKEN` fallback   | **Primary:** App token generated via JWT signing from PEM key at `/var/run/github-app/private-key.pem` (Prow secret: `openshift-app-platform-shift-github-bot`). Required for Phase 2+ pushes (avoids `GITHUB_TOKEN` anti-recursion). **Fallback:** If App is not installed on the target repo, uses `GITHUB_TOKEN` (sufficient for Phase 1 read + comment). |
+| Claude API          | GCP Application Default Credentials (ADC) via Vertex AI | `CLAUDE_CODE_USE_VERTEX=1`, `ANTHROPIC_VERTEX_PROJECT_ID=itpc-gcp-hcm-pe-eng-claude`. ADC JSON mounted at `/var/run/gcloud-adc/application_default_credentials.json` (Prow secret: `oap-lts-claude-gcp-vertex-sa`). |
+| GitHub (CI logs)    | Same GitHub App installation token             | Used via `gh` CLI for `gh api` calls and log fetching.                                                                                                                                          |
+| Sippy API           | None (unauthenticated)                         | Public API at `sippy.dptools.openshift.org`. Used by `monitor.sh` to query flake history for test failures. No credentials required.                                                            |
 
 
 ### Data Retention
 
-- No persistent storage beyond PR comments and GHA artifacts.
-- Audit logs retained for 30 days as GHA artifacts.
+- No persistent storage beyond PR comments and Prow GCS artifacts.
+- Audit logs and reports are written to the Prow job container's filesystem and available in GCS build artifacts for the job's retention period (standard OpenShift CI retention).
 - No secrets are logged — the audit log contains only file paths, commit SHAs, and action outcomes.
 
-### Data Flow: Periodic PR Agent
+### Data Flow: Prow Presubmit CI Monitor
 
 ```
+  Developer pushes to PR branch
+    → Prow triggers oape-ci-monitor presubmit (alongside other CI jobs)
+    → Also triggerable manually via: /test oape-ci-monitor
+
 ┌─────────────────────────────────────────────────────────────────┐
-│  GitHub Actions Runner (periodic-pr-agent, cron: every 1h)     │
+│  Prow Pod (ci-monitor-agent container, ci-operator managed)     │
 │                                                                 │
-│  ┌──────────┐    ┌──────────────┐    ┌──────────────────────────┐│
-│  │ Setup    │───▶│ Discover PRs │───▶│ For each PR:             ││
-│  │ (tools,  │    │ (gh pr list  │    │  0. Check merge conflicts││
-│  │  auth)   │    │  per repo,   │    │  1. Fetch CI (gh pr chk) ││
-│  └──────────┘    │  skip label  │    │  2. Classify (regex+LLM) ││
-│                  │  filter)     │    │  3. Auto-fix trivial     ││
-│                  └──────────────┘    │  4. Address reviews      ││
-│                                      │  5. Post report          ││
-│                                      └──────────┬───────────────┘│
-│                                                  │              │
-│  ┌──────────────────┐                           │              │
-│  │ Upload artifacts │◀──────────────────────────┘              │
-│  │ (audit log,      │                                          │
-│  │  reports)        │                                          │
-│  └──────────────────┘                                          │
+│  ┌───────────┐    ┌───────────────┐    ┌─────────────────────┐ │
+│  │ Generate  │───▶│ monitor.sh    │───▶│ dispatch.sh          │ │
+│  │ GitHub    │    │ (poll checks, │    │ (log trigger actions,│ │
+│  │ App token │    │  collect GCS  │    │  Phase 2+: invoke    │ │
+│  │ from PEM  │    │  artifacts,   │    │  auto-fix/Claude)    │ │
+│  └───────────┘    │  classify,    │    └─────────────────────┘ │
+│                    │  sippy query, │                             │
+│                    │  post report) │                             │
+│                    └───────────────┘                             │
 └─────────────────────────────────────────────────────────────────┘
         │                    │                    │
         ▼                    ▼                    ▼
    ┌─────────┐      ┌──────────────┐     ┌──────────────┐
-   │ GitHub  │      │ Claude API   │     │ Target Repos │
-   │ API     │      │ (Vertex AI)  │     │ (push fixes, │
-   │ (PRs,   │      │              │     │  post        │
-   │  checks)│      │              │     │  comments)   │
+   │ GitHub  │      │ Claude API   │     │ Sippy API    │
+   │ API     │      │ (Vertex AI)  │     │ (flake       │
+   │ (PRs,   │      │ (Phase 2+    │     │  history)    │
+   │  checks,│      │  only)       │     │              │
+   │  comment)│     │              │     │              │
    └─────────┘      └──────────────┘     └──────────────┘
-```
-
-### Data Flow: On-Demand PR Agent
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  Target Repo (e.g., cert-manager-operator)                       │
-│  ┌──────────────────────────────────┐                            │
-│  │ oape-pr-agent-trigger.yml        │                            │
-│  │ Listens: check_run + status      │──── repository_dispatch ──▶│
-│  │ Filters: all open PRs             │                            │
-│  └──────────────────────────────────┘                            │
-└──────────────────────────────────────────────────────────────────┘
-                                                     │
-                                                     ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  GitHub Actions Runner (on-demand-pr-agent, oape-ai-e2e repo)   │
-│                                                                 │
-│  Trigger: repository_dispatch(pr_url) ← from target repo       │
-│           workflow_dispatch(pr_url)    ← manual                 │
-│                                                                 │
-│  ┌──────────┐    ┌───────────────────┐    ┌─────────────────┐  │
-│  │ Shared   │───▶│ Parse PR URL      │───▶│ Process PR      │  │
-│  │ setup    │    │ (from dispatch    │    │ (same phases    │  │
-│  │ (reuse)  │    │  payload or input)│    │  as periodic)   │  │
-│  └──────────┘    └───────────────────┘    └────────┬────────┘  │
-│                                                     │           │
-│  ┌──────────────────┐                              │           │
-│  │ Upload artifacts │◀─────────────────────────────┘           │
-│  └──────────────────┘                                          │
-└─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -1620,8 +1509,8 @@ Subtasks 1–8 (the command wraps all existing capabilities).
 
 | Variable              | Default                                                                      | Description                                                                                                              |
 | --------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `BOT_USER`            | `oape-bot[bot]`                                                              | Git identity used for bot commits. Also used to detect bot's own replies in review threads (skip re-responding to self). |
-| `PR_AGENT_MAX_PRS`    | `4`                                                                          | Maximum PRs to process per periodic run (kept low to stay within 1-hour GitHub App token TTL)                            |
+| `BOT_USER`            | `openshift-app-platform-shift-bot`                                           | Git identity used for bot commits (matches the GitHub App). Also used to detect bot's own replies in review threads (skip re-responding to self). |
+| `PR_AGENT_MAX_PRS`    | `4`                                                                          | Maximum PRs to process per periodic run (kept low to stay within the Prow job timeout)                                   |
 | `MAX_BUDGET_PER_PR`   | `5.00`                                                                       | Maximum dollar amount to spend on Claude API per PR (passed to `--max-budget-usd`)                                       |
 | `MAX_COMMITS_PER_RUN` | `10`                                                                         | Maximum total commits across all PRs in a single run                                                                     |
 | `MAX_COMMITS_PER_PR`  | `3`                                                                          | Maximum commits per individual PR processing                                                                             |
@@ -1634,17 +1523,13 @@ Subtasks 1–8 (the command wraps all existing capabilities).
 | `GCSWEB_BASE_URL`     | `https://gcsweb-ci.apps.ci.l2s4.p1.openshiftapps.com`                        | Base URL for OpenShift CI gcsweb (Prow log fetching). Update if CI infrastructure migrates.                              |
 
 
-### Required Secrets
+### Required Prow Secrets
 
 
-| Secret                           | Purpose                                                                                                                                       |
-| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OAPE_APP_ID`                    | GitHub App ID for generating push tokens                                                                                                      |
-| `OAPE_APP_PRIVATE_KEY`           | GitHub App private key (PEM format)                                                                                                           |
-| `GCP_PROJECT_ID`                 | GCP project ID for Vertex AI                                                                                                                  |
-| `GCP_WORKLOAD_IDENTITY_PROVIDER` | GCP Workload Identity Provider resource name (e.g., `projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL/providers/PROVIDER`) |
-| `GCP_SERVICE_ACCOUNT`            | GCP service account email for Vertex AI access (e.g., `oape-ci@project.iam.gserviceaccount.com`)                                              |
-| `OAPE_DISPATCH_TOKEN`            | (Target repos only) GitHub token with `repo` scope on `openshift-eng/oape-ai-e2e` for sending `repository_dispatch` events                    |
+| Secret (in `test-credentials` namespace)           | Mount Path                | Purpose                                                                                      |
+| -------------------------------------------------- | ------------------------- | -------------------------------------------------------------------------------------------- |
+| `oap-lts-claude-gcp-vertex-sa`                     | `/var/run/gcloud-adc/`    | GCP ADC JSON for Vertex AI Claude access (`application_default_credentials.json`)            |
+| `openshift-app-platform-shift-github-bot`          | `/var/run/github-app/`    | GitHub App ID (`app-id` key) and private key PEM (`private-key.pem` key) for generating installation tokens |
 
 
 ---
@@ -1656,11 +1541,11 @@ Subtasks 1–8 (the command wraps all existing capabilities).
 - **Rate limited**: 4 PRs per periodic run (configurable via `PR_AGENT_MAX_PRS`), 100 agentic turns per PR.
 - **Cannot access private resources** — no access to internal systems beyond GitHub and Jira.
 - **Cannot execute destructive operations** — no ability to force-push, rebase, or delete branches. Enforced via `--allowedTools` restrictions on Claude CLI invocations.
-- **Concurrent processing race** — a periodic run and an on-demand run could process the same PR simultaneously. The consequence is duplicate work (not data loss): both runs may analyze the same failures and attempt the same fixes, with the second push either succeeding (identical fix) or gracefully failing (conflict detected by `git pull --rebase`). State persistence uses last-writer-wins, which may cause already-addressed comments to be re-analyzed on the next run.
-- **GitHub Actions timeout** — workflow `timeout-minutes: 55` to stay within the 1-hour GitHub App token TTL.
-- **Token expiry** — GitHub App tokens are valid for 1 hour. The 55-minute timeout and 4-PR limit ensure processing completes within this window.
-- **Cost** — deterministic classification handles ~80-90% of cases without Claude API cost. Claude Code is invoked only for `unknown` failures and review comment handling. The periodic job processes up to 4 PRs per run.
-- **Target repo trigger installation** — the on-demand trigger workflow (`oape-pr-agent-trigger.yml`) must be installed in each target repo. Requires approval from target repo maintainers and a `OAPE_DISPATCH_TOKEN` secret.
+- **Concurrent processing race** — multiple Prow presubmit runs for the same PR (e.g., after rapid pushes) could process simultaneously. The consequence is duplicate work (not data loss): both runs may analyze the same failures and attempt the same fixes, with the second push either succeeding (identical fix) or gracefully failing (conflict detected by `git pull --rebase`). State persistence uses last-writer-wins, which may cause already-addressed comments to be re-analyzed on the next run.
+- **Prow job timeout** — presubmit timeout is `2h30m0s`, providing ample time for CI polling plus analysis. The GitHub App installation token generated at job start is valid for 1 hour, which is sufficient for single-PR presubmit processing.
+- **No periodic sweep** — Phase 1 is purely presubmit-driven. There is no periodic scanner catching PRs that were missed. If the presubmit is not configured for a repo, no monitoring occurs for that repo's PRs.
+- **Cost** — deterministic classification handles ~80-90% of cases without Claude API cost. Claude Code is invoked only for `unknown` failures and review comment handling.
+- **Target repo ci-operator config** — the `oape-ci-monitor` presubmit must be added to each target repo's ci-operator config in `openshift/release`. Requires a PR to `openshift/release` approved by the repo's CI admins.
 
 ---
 
@@ -1668,9 +1553,10 @@ Subtasks 1–8 (the command wraps all existing capabilities).
 
 ### Performance Monitoring
 
-- **GitHub Actions logs**: View at `Actions` tab → `periodic-pr-agent` / `on-demand-pr-agent` workflows.
-- **Audit artifacts**: Download from the workflow run's artifacts tab (30-day retention).
-- Track job success/failure rates via GitHub Actions workflow run history.
+- **Prow job logs**: View at `https://prow.ci.openshift.org` → search for `oape-ci-monitor` job for the target repo.
+- **GCS artifacts**: Build logs and artifacts stored in GCS buckets accessible via gcsweb (e.g., `gcsweb-ci.apps.ci.l2s4.p1.openshiftapps.com`).
+- **PR comments**: The CI monitor report is posted directly to the PR, providing immediate visibility without navigating CI systems.
+- Track job success/failure rates via Prow job history.
 
 ### Metrics and Indicators
 
@@ -1701,7 +1587,7 @@ The OAPE team should conduct monthly reviews:
 
 | #   | Subtask                                                                                                         | Type                   | Effort Estimate |
 | --- | --------------------------------------------------------------------------------------------------------------- | ---------------------- | --------------- |
-| 0   | GitHub Actions CI infrastructure + target repo trigger workflow                                                 | GHA Workflows + Script | Medium          |
+| 0   | Prow presubmit infrastructure + ci-operator config                                                              | Prow ci-operator Config | Medium          |
 | 1   | Create entrypoint script with PR discovery, prechecks, merge conflict detection, skip label, and state tracking | Script                 | Medium          |
 | 2   | Implement CI check monitoring via `gh pr checks`                                                                | Script                 | Medium          |
 | 3   | Implement CI failure log analysis with deterministic classification + Claude fallback                           | Script + Skill         | Large           |
@@ -1710,7 +1596,7 @@ The OAPE team should conduct monthly reviews:
 | 6   | Wire together the PR processing pipeline (standalone scripts)                                                   | Script                 | Small           |
 | 7   | Implement safety guardrails and file-modification boundaries (sourced utility library, no dependencies)         | Script + Skill         | Medium          |
 | 8   | Implement status reporting with merge conflict section and PR comment summary                                   | Script                 | Medium          |
-| 9   | PR agent testing and validation                                                                                 | GHA Workflow + Script  | Small           |
+| 9   | PR agent testing and validation                                                                                 | Script                 | Small           |
 | 10  | Create `/oape:pr-agent` command                                                                                 | Command                | Small           |
 
 
@@ -1719,13 +1605,8 @@ The OAPE team should conduct monthly reviews:
 
 | File                                               | Purpose                                                                                                               |
 | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `.github/workflows/pr-agent-shared.yml`            | Reusable workflow with shared setup (tools, auth, artifacts), timeout: 55 min                                         |
-| `.github/workflows/periodic-pr-agent.yml`          | Periodic scanner workflow (cron every 1h weekdays, calls shared)                                                      |
-| `.github/workflows/on-demand-pr-agent.yml`         | On-demand per-PR workflow (`workflow_dispatch` + `repository_dispatch`, calls shared)                                 |
-| `.github/workflows/oape-pr-agent-trigger.yml`      | Lightweight trigger workflow template for installation in target repos (listens for `check_run`/`status` failures)    |
-| `.github/workflows/pr-agent-test.yml`              | CI validation workflow (shellcheck, dry-run test)                                                                     |
+| `docs/prow-ci-operator-config.yaml`                | Reference ci-operator config for adding `oape-ci-monitor` presubmit to target repos in `openshift/release`            |
 | `scripts/pr-agent/entrypoint.sh`                   | Main orchestration script (both modes, merge conflict check, skip label filter, state tracking)                       |
-| `scripts/pr-agent/setup-tools.sh`                  | Tool installation (Go, goimports, golangci-lint, Claude CLI)                                                          |
 | `scripts/pr-agent/ci-monitor.sh`                   | CI check fetching via `gh pr checks` and status aggregation (standalone executable)                                   |
 | `scripts/pr-agent/log-analyzer.sh`                 | Log fetching + deterministic classification + Claude fallback for unknowns (standalone executable)                    |
 | `scripts/pr-agent/auto-fix.sh`                     | Trivial fix application with blobless clone, pre/post blocklist checks, global commit counter (standalone executable) |
@@ -1735,7 +1616,7 @@ The OAPE team should conduct monthly reviews:
 | `scripts/pr-agent/test-dry-run.sh`                 | Dry-run integration test script                                                                                       |
 | `plugins/oape/skills/ci-failure-analysis/SKILL.md` | Claude Code skill for failure classification (content included via `cat` in prompts)                                  |
 | `plugins/oape/skills/pr-agent-safety/SKILL.md`     | Safety guardrails skill (content included via `cat` in prompts)                                                       |
-| `plugins/oape/commands/pr-agent.md`                | `/oape:pr-agent` command for interactive developer use (GHA uses `entrypoint.sh` directly)                            |
+| `plugins/oape/commands/pr-agent.md`                | `/oape:pr-agent` command for interactive developer use (Prow presubmit uses `monitor.sh`/`dispatch.sh` directly)      |
 
 
 ### User Guide
@@ -1744,44 +1625,41 @@ The OAPE team should conduct monthly reviews:
 
 Track PRs processed by the agent:
 
-- **Periodic runs**: `Actions` tab → `periodic-pr-agent` workflow
-- **Agent comments**: Look for comments containing `<!-- oape-pr-agent-report -->` on PRs in allowed repos
-- **Audit logs**: Download from workflow run artifacts
+- **Prow job logs**: Navigate to Prow CI dashboard (`prow.ci.openshift.org`), filter by job name `oape-ci-monitor`
+- **Agent comments**: Look for comments containing `<!-- oape-ci-monitor -->` on PRs in configured repos
+- **GCS artifacts**: Available via gcsweb for the `oape-ci-monitor` job run
 
 #### Triggering On-Demand
 
-The agent triggers automatically on CI failure via target repo trigger workflows, or manually:
+The agent triggers automatically as a Prow presubmit on every PR push, or manually:
 
-1. **Automatic (primary)**: Lightweight trigger workflow in the target repo detects `check_run`/`status` failure on any open PR and dispatches to `oape-ai-e2e` via `repository_dispatch`
-2. **Via GitHub UI**: `Actions` → `on-demand-pr-agent` → `Run workflow` → enter PR URL
-3. **Via CLI**: `gh workflow run on-demand-pr-agent.yml -f pr_url=https://github.com/org/repo/pull/123`
+1. **Automatic (primary)**: The `oape-ci-monitor` presubmit runs automatically on every PR push in configured repos
+2. **Via Prow chatops**: Comment `/test oape-ci-monitor` on the PR
 
 #### Skipping a PR
 
-To exclude a PR from automated processing, add the `pr-agent:skip` label. The periodic scanner and on-demand triggers will skip PRs with this label.
+To exclude a PR from automated processing, add the `pr-agent:skip` label. The presubmit will skip PRs with this label.
 
 #### Reprocessing
 
-The agent maintains lightweight state across runs via the PR report comment (tracking which CI jobs have been analyzed and which review comments have been addressed). On each run, already-processed items are skipped to avoid duplicate work. To force a full reprocessing of a PR, delete the agent's report comment (containing `<!-- oape-pr-agent-report -->`) from the PR, then trigger another run. The periodic scanner will pick it up on the next cycle, or use on-demand triggering.
+The agent maintains lightweight state across runs via the PR report comment (tracking which CI jobs have been analyzed and which review comments have been addressed). On each run, already-processed items are skipped to avoid duplicate work. To force a full reprocessing of a PR, delete the agent's report comment (containing `<!-- oape-ci-monitor -->`) from the PR, then trigger another run via `/test oape-ci-monitor`.
 
 ---
 
 ## Implementation Phasing
 
-The subtasks above describe the full target architecture (17 files). Implementation is phased to deliver value incrementally and validate the approach before investing in the full design.
+The subtasks above describe the full target architecture. Implementation is phased to deliver value incrementally and validate the approach before investing in the full design.
 
-### Phase 1: MVP — GHA CI Monitor in Target Repos (Report-Only)
+### Phase 1: MVP — Prow Presubmit CI Monitor (Report-Only)
 
-**Goal**: Prove the concept by adding a GitHub Actions workflow to target repos that monitors CI and reports failures. The workflow triggers on GitHub `status` events — each time a Prow or GHA job completes, the workflow fires, checks if ALL checks are now terminal, and only runs the full analysis once everything is done. No idle polling, no wasted runner minutes. `dispatch.sh` then logs planned next-step actions (no-op in Phase 1, real invocations in Phase 2+). No auto-fix, no review comment handling, no Claude dependency. No container images.
+**Goal**: Prove the concept by adding a Prow presubmit job to target repos that monitors CI and reports failures. The presubmit runs alongside other CI jobs, polls until all other checks reach a terminal state, then classifies failures and posts a structured report. `dispatch.sh` then logs planned next-step actions (no-op in Phase 1, real invocations in Phase 2+). No auto-fix, no review comment handling, no Claude dependency.
 
-**Architecture**: Each target repo adds a `.github/workflows/oape-ci-monitor.yml` (copied from `docs/target-repo-ci-monitor.yml`). Triggered by `status` events, the workflow gates on "all checks complete" before cloning oape-ai-e2e and running the analysis. Typical latency: analysis starts within ~30s of the last CI job finishing.
+**Architecture**: Each target repo's ci-operator config in `openshift/release` gains three additions from `docs/prow-ci-operator-config.yaml`: (1) an inline `ci-monitor-agent` image build, (2) a promotion exclusion, and (3) an `oape-ci-monitor` presubmit test. The presubmit builds the container, generates a GitHub App token from the mounted PEM key, and runs the analysis scripts.
 
 ```
-Prow/GHA job finishes → GitHub fires status event
-  → GHA triggers oape-ci-monitor workflow
-  → Gate step: finds PR for commit, checks if all checks are terminal
-  → If checks still pending → exits in seconds (no work done)
-  → If all complete → clones oape-ai-e2e from GitHub
+PR push → Prow triggers oape-ci-monitor presubmit
+  → Build ci-monitor-agent container (inline Dockerfile)
+  → Generate GitHub App token from mounted PEM
   → monitor.sh: polls gh pr checks → collects GCS artifacts → classifies → Sippy → report → result JSON
   → dispatch.sh: reads result JSON → logs planned actions (Phase 1) / invokes auto-fix, Claude, /retest (Phase 2+)
 ```
@@ -1790,10 +1668,9 @@ Prow/GHA job finishes → GitHub fires status event
 | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
 | `scripts/ci-monitor/monitor.sh`             | CI monitor: polls checks, collects GCS artifacts, classifies failures, queries Sippy, generates report, posts comment, writes result JSON        | 2, 3 (partial)    |
 | `scripts/ci-monitor/dispatch.sh`            | Failure dispatch: reads result JSON, logs planned actions (Phase 1), invokes further oape-ai-e2e tools on failure (Phase 2+)                     | 6 (partial)       |
-| `docs/target-repo-ci-monitor.yml`           | GHA workflow template that target repos copy into `.github/workflows/oape-ci-monitor.yml`                                                       | 0 (partial)       |
-| `.github/workflows/pr-agent-test.yml`       | shellcheck + syntax validation for `scripts/pr-agent/`, `scripts/ci-monitor/`, and the workflow template                                        | 9 (partial)       |
+| `docs/prow-ci-operator-config.yaml`         | Reference ci-operator config template for adding `oape-ci-monitor` presubmit to target repos in `openshift/release`                             | 0 (partial)       |
 
-**Scope**: Report-only CI monitoring via a GHA workflow in each target repo. First target repo: must-gather-operator. The workflow uses GitHub `status` event triggers with a gate step that exits in seconds if checks are still pending — no idle polling or wasted runner minutes. Once all checks are terminal, it clones oape-ai-e2e and runs `monitor.sh` (with `SKIP_POLL=true`) which fetches `gh pr checks`, collects `build-log.txt` from GCS for failed Prow jobs, classifies failures into categories (`install-failure`, `test-failure`, `build-failure`, `lint-failure`, `infra-flake`, `unknown`), queries Sippy for flake history, and posts a structured markdown report on the PR. A machine-readable JSON result (`ci-monitor-result.json`) includes suggested trigger actions (retest, auto-fix-lint, investigate). `dispatch.sh` reads this result and logs planned actions — in Phase 1 these are no-ops, in Phase 2+ they become real invocations of oape-ai-e2e tools.
+**Scope**: Report-only CI monitoring via a Prow presubmit in each target repo. First target repo: must-gather-operator. The presubmit runs as `always_run: true, optional: true` and polls until all other checks are terminal. Once complete, it runs `monitor.sh` which fetches `gh pr checks`, collects `build-log.txt` from GCS for failed Prow jobs, classifies failures into categories (`install-failure`, `test-failure`, `build-failure`, `lint-failure`, `infra-flake`, `unknown`), queries Sippy for flake history, and posts a structured markdown report on the PR. A machine-readable JSON result (`ci-monitor-result.json`) includes suggested trigger actions (retest, auto-fix-lint, investigate). `dispatch.sh` reads this result and logs planned actions — in Phase 1 these are no-ops, in Phase 2+ they become real invocations of oape-ai-e2e tools.
 
 **Phase 1 enhancements (from PR #60 analysis):**
 - **Release repo discovery**: `monitor.sh` fetches the ci-operator config from `openshift/release` for the target repo/branch, providing authoritative job metadata (required/optional, cluster_profile, OCP release version). Falls back to name-based heuristics if unavailable.
@@ -1802,7 +1679,7 @@ Prow/GHA job finishes → GitHub fires status event
 - **Dynamic Sippy release version**: Resolves OCP version from ci-operator config (`releases.latest.release.version`) or Prow job name pattern, providing accurate flake data per release.
 - **Prow Job Breakdown table**: Report includes a table of ALL checks (pass/fail) with state, category, required/optional status, flake%, and recommended action.
 
-**Retained for future phases**: The PR agent scripts (`scripts/pr-agent/entrypoint.sh`, `safety.sh`) are retained as the foundation for `dispatch.sh` to invoke in Phase 2+. Since the workflow clones the full oape-ai-e2e repo, all tools are available at runtime.
+**Retained for future phases**: The PR agent scripts (`scripts/pr-agent/entrypoint.sh`, `safety.sh`) are retained as the foundation for `dispatch.sh` to invoke in Phase 2+. Since the `ci-monitor-agent` container includes all oape-ai-e2e scripts and plugins at build time, all tools are available at runtime.
 
 ### Phase 2: Auto-Fix + Claude Intelligence
 
@@ -1810,13 +1687,12 @@ Prow/GHA job finishes → GitHub fires status event
 
 | File                                               | Purpose                                                                                                 | Maps to Subtasks |
 | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ---------------- |
-| `.github/workflows/ci-monitor-dispatch.yml`        | GHA workflow triggered by ci-monitor result: dispatches auto-fix, retest, or Claude analysis            | 0 (partial)      |
 | `scripts/pr-agent/auto-fix.sh`                     | Extracted auto-fix engine: `go fmt`, `goimports`, `make generate`, scoped to PR-changed files           | 4                |
 | `scripts/pr-agent/log-analyzer.sh`                 | Deterministic + Claude fallback classification for `unknown` failures                                   | 3                |
 | `plugins/oape/skills/ci-failure-analysis/SKILL.md` | Claude skill for unknown failure classification (reference: PR #60's `plugins/oape/skills/ci-monitor/SKILL.md`) | 3                |
 | `scripts/pr-agent/safety.sh`                       | Retained guardrails: blocklist, audit log, commit limits, diff size guard                               | 7                |
 
-**Scope adds**: Auto-fix for `lint-failure` and `build-failure` categories, auto-retest (`/retest`) for `infra-flake`, Claude Code CLI fallback for `unknown` failures, dispatch workflow that reads `ci-monitor-result.json` and takes action.
+**Scope adds**: Auto-fix for `lint-failure` and `build-failure` categories, auto-retest (`/retest`) for `infra-flake`, Claude Code CLI fallback for `unknown` failures. `dispatch.sh` (already invoked by the Prow presubmit after `monitor.sh`) reads `ci-monitor-result.json` and takes action — no separate dispatch workflow needed.
 
 **Learnings from PR #60 to incorporate in Phase 2:**
 
@@ -1854,7 +1730,7 @@ Prow/GHA job finishes → GitHub fires status event
 | `plugins/oape/skills/pr-agent-safety/SKILL.md` | Safety rules skill for Claude                                                              | 7                |
 | `plugins/oape/commands/pr-agent.md`            | `/oape:pr-agent` command for interactive + headless use                                    | 10               |
 
-**Scope adds**: Review comment handling, `/oape:pr-agent` command, rollout of `oape-ci-monitor` to all repos in `team-repos.csv`, full test suite.
+**Scope adds**: Review comment handling, `/oape:pr-agent` command, rollout of `oape-ci-monitor` presubmit to all repos in `team-repos.csv` (by adding ci-operator config snippets to each repo's config in `openshift/release`), full test suite.
 
 ---
 
