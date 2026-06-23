@@ -44,8 +44,12 @@ fi
 OVERALL_STATUS=$(jq -r '.overall_status' "$RESULT_FILE")
 TRIGGER_COUNT=$(jq '.trigger_actions | length' "$RESULT_FILE")
 PR_URL=$(jq -r '.pr_url' "$RESULT_FILE")
+# Used in Phase 2+ action execution (currently commented out)
+# shellcheck disable=SC2034
 OWNER=$(jq -r '.owner' "$RESULT_FILE")
+# shellcheck disable=SC2034
 REPO=$(jq -r '.repo' "$RESULT_FILE")
+# shellcheck disable=SC2034
 PR_NUMBER=$(jq -r '.pr_number' "$RESULT_FILE")
 
 echo "============================================"

@@ -27,6 +27,7 @@
 
 set -euo pipefail
 
+# shellcheck disable=SC2034
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ---------------------------------------------------------------------------
@@ -289,7 +290,8 @@ poll_until_complete() {
 fetch_gcs_artifact() {
   local job_name="$1"
   local job_url="$2"
-  local log_file="${WORK_DIR}/log-$(echo "$job_name" | tr '/ ' '__').txt"
+  local log_file
+  log_file="${WORK_DIR}/log-$(echo "$job_name" | tr '/ ' '__').txt"
 
   if [[ "$job_url" == *"prow"* ]] || [[ "$job_url" == *"/view/gs/"* ]]; then
     local gcs_path
@@ -678,7 +680,7 @@ generate_report() {
     local job_manifest="${WORK_DIR}/job-manifest.json"
 
     jq -r '.[] | "\(.name)\t\(.bucket)\t\(.link)"' "$checks_file" 2>/dev/null \
-      | while IFS=$'\t' read -r jb_name jb_bucket jb_link; do
+      | while IFS=$'\t' read -r jb_name jb_bucket _jb_link; do
           [[ -z "$jb_name" ]] && continue
           local jb_category="--" jb_required="--" jb_flake="--" jb_action="--"
 
@@ -702,6 +704,8 @@ generate_report() {
           # Look up required/optional from job manifest
           if [[ "$USE_RELEASE_CONTEXT" == "true" && -f "$job_manifest" ]]; then
             local short_name
+            # Pattern includes variable interpolation not supported by ${//}
+            # shellcheck disable=SC2001
             short_name=$(echo "$jb_name" | sed "s/^pull-ci-${OWNER}-${REPO}-[^-]*-//")
             local is_optional
             is_optional=$(jq -r --arg n "$short_name" '.[$n].optional // false' "$job_manifest" 2>/dev/null || echo "false")

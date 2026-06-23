@@ -22,6 +22,7 @@ This project provides AI-driven tools for end-to-end feature development in Open
 | `/oape:predict-regressions <base-branch>`                        | Predict API regressions and breaking changes from git diff     |
 | `/oape:review <ticket_id> [base_ref]`                            | Production-grade code review against Jira requirements         |
 | `/oape:implement-review-fixes <report>`                          | Automatically apply fixes from a review report                 |
+| `/oape:pr-agent <PR-URL> [--dry-run] [--monitor-only]`           | Monitor PR CI status, classify failures, generate report       |
 
 ### Input Sources for api-generate and api-implement
 

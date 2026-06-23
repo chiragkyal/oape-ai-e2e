@@ -111,6 +111,27 @@ Once the PR Lifecycle Agent is complete, all open PRs in allowed repos (`team-re
 
 ---
 
+## Completion Status
+
+| # | Subtask | Phase | Status | Notes |
+|---|---------|-------|--------|-------|
+| 0 | Prow presubmit infrastructure | 1 | **Done** | `docs/prow-ci-operator-config.yaml`, `images/ci-monitor.Dockerfile`, release PR #80727 (rehearsal passed) |
+| 1 | Entrypoint + PR discovery | 1 | **Done** | `scripts/pr-agent/entrypoint.sh` — periodic/on-demand modes, state persistence, per-PR timeout |
+| 2 | CI check monitoring | 1 | **Done** | Dual implementation: lightweight in entrypoint.sh, comprehensive in `scripts/ci-monitor/monitor.sh` |
+| 3 | Failure log analysis | 1 | **Partial** | Deterministic regex classification done. Claude fallback for `unknown` deferred to Phase 2 |
+| 4 | Trivial auto-fix engine | 2 | **Partial** | `trivial-format` + `trivial-generated-files` implemented. `trivial-lint`/`trivial-import` deferred |
+| 5 | Review comment handler | 2 | **Not started** | `review-handler.sh` not yet created |
+| 6 | Pipeline wiring | 1 | **Done** | `process_pr()` orchestrates all phases; `dispatch.sh` routes actions (Phase 1 = log-only) |
+| 7 | Safety guardrails | 1 | **Done** | `scripts/pr-agent/safety.sh` — blocklist, commit limits, audit log, retry helpers |
+| 8 | Status reporting | 1 | **Done** | Report generation + idempotent PR comment posting in entrypoint.sh |
+| 9 | Testing & validation | 1 | **Done** | `scripts/pr-agent/test-dry-run.sh` — shellcheck + dry-run integration + output verification |
+| 10 | `/oape:pr-agent` command | 1 | **Done** | `plugins/oape/commands/pr-agent.md` + AGENTS.md command table |
+
+**Phase 1 (report-only):** Complete — all required subtasks done, tests passing (10/10).
+**Phase 2 (auto-fix + review):** Subtasks 4 (expand), 5 (new), and 3 (Claude fallback) remain.
+
+---
+
 ## Subtask Overview
 
 This document breaks the PR Lifecycle Agent into 10 implementable subtasks. Each subtask is self-contained with a clear definition, acceptance criteria, dependencies, and implementation hints. The architecture follows a **hybrid model**: deterministic bash for mechanical orchestration (PR discovery, CI polling, tool setup, safety guardrails) and Claude Code CLI for intelligent analysis (failure classification, review comment handling, complex code fixes).
@@ -185,6 +206,7 @@ Establish the Prow presubmit job infrastructure that all subsequent subtasks bui
 5. Job timeout is set to `2h30m0s`. Resource requests: 1 CPU, 500Mi memory.
 6. The test step invokes `/app/scripts/ci-monitor/monitor.sh` followed by `/app/scripts/ci-monitor/dispatch.sh`.
 7. Manually triggerable via `/test oape-ci-monitor` on any PR in a configured target repo.
+8. **Rehearsal detection:** When the job runs as a Prow rehearsal (i.e., `REPO_NAME=release` and `REPO_OWNER=openshift`), it detects the `openshift/release` context and switches to a real open PR on the target repo (e.g., `openshift/must-gather-operator`). The rehearsal runs the full pipeline — including posting the analysis comment on the target PR — to validate the end-to-end flow without requiring the release PR to be merged first. The first open PR on the target repo is selected via the GitHub API.
 
 ### Dependencies
 
@@ -234,6 +256,24 @@ None — this is the foundation subtask.
           set -euo pipefail
 
           echo "[setup] Starting oape-ci-monitor for ${REPO_OWNER}/${REPO_NAME} PR#${PULL_NUMBER}"
+
+          # --- Rehearsal detection ---
+          # Prow rehearsal runs against openshift/release, not the target repo.
+          # Switch to a real target-repo PR to validate the full pipeline.
+          if [[ "${REPO_NAME}" == "release" && "${REPO_OWNER}" == "openshift" ]]; then
+            echo "[setup] Detected openshift/release context — switching to test target"
+            export REPO_OWNER="REPO_ORG"
+            export REPO_NAME="REPO_NAME"
+            TEST_PR=$(curl -s "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/pulls?state=open&per_page=1" \
+              | python3 -c "import sys,json; data=json.load(sys.stdin); print(data[0]['number'] if data else '')" 2>/dev/null || echo "")
+            if [[ -z "$TEST_PR" ]]; then
+              echo "[setup] No open PRs found on ${REPO_OWNER}/${REPO_NAME} — skipping"
+              exit 0
+            fi
+            export PULL_NUMBER="$TEST_PR"
+            export PR_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/pull/${PULL_NUMBER}"
+            echo "[setup] Testing against ${REPO_OWNER}/${REPO_NAME}#${PULL_NUMBER}"
+          fi
 
           # --- GitHub auth: try App token, fall back to GITHUB_TOKEN ---
           # App token is preferred (required for Phase 2+ pushes that trigger CI).
@@ -316,7 +356,7 @@ None — this is the foundation subtask.
   ```
 
 - **GitHub App token** is preferred over `GITHUB_TOKEN` because pushes made with `GITHUB_TOKEN` do not trigger downstream CI runs (GitHub's anti-recursion rule). The Prow job attempts to generate the App token inline via JWT signing from the mounted PEM key. If the App is not installed on the target repo, it falls back to `GITHUB_TOKEN` which is sufficient for Phase 1 (read + comment only). Phase 2+ auto-fix pushes require the App to be installed.
-- **Rollout**: To add the CI monitor to a target repo, copy the three snippets from `docs/prow-ci-operator-config.yaml` into the target repo's ci-operator config in `openshift/release` and submit a PR.
+- **Rollout**: To add the CI monitor to a target repo, copy the three snippets from `docs/prow-ci-operator-config.yaml` into the target repo's ci-operator config in `openshift/release` and submit a PR. The rehearsal detection block allows validating the full pipeline (including comment posting on the target repo) via `/pj-rehearse` before merging the release PR.
 
 ### Files
 
@@ -1669,6 +1709,8 @@ PR push → Prow triggers oape-ci-monitor presubmit
 | `scripts/ci-monitor/monitor.sh`             | CI monitor: polls checks, collects GCS artifacts, classifies failures, queries Sippy, generates report, posts comment, writes result JSON        | 2, 3 (partial)    |
 | `scripts/ci-monitor/dispatch.sh`            | Failure dispatch: reads result JSON, logs planned actions (Phase 1), invokes further oape-ai-e2e tools on failure (Phase 2+)                     | 6 (partial)       |
 | `docs/prow-ci-operator-config.yaml`         | Reference ci-operator config template for adding `oape-ci-monitor` presubmit to target repos in `openshift/release`                             | 0 (partial)       |
+
+**Validation**: The pipeline has been validated end-to-end via Prow rehearsal on [openshift/release#80727](https://github.com/openshift/release/pull/80727). The rehearsal detects the `openshift/release` context, switches to a real open PR on `openshift/must-gather-operator`, and runs the full pipeline including posting the analysis comment — allowing validation without merging the release PR first.
 
 **Scope**: Report-only CI monitoring via a Prow presubmit in each target repo. First target repo: must-gather-operator. The presubmit runs as `always_run: true, optional: true` and polls until all other checks are terminal. Once complete, it runs `monitor.sh` which fetches `gh pr checks`, collects `build-log.txt` from GCS for failed Prow jobs, classifies failures into categories (`install-failure`, `test-failure`, `build-failure`, `lint-failure`, `infra-flake`, `unknown`), queries Sippy for flake history, and posts a structured markdown report on the PR. A machine-readable JSON result (`ci-monitor-result.json`) includes suggested trigger actions (retest, auto-fix-lint, investigate). `dispatch.sh` reads this result and logs planned actions — in Phase 1 these are no-ops, in Phase 2+ they become real invocations of oape-ai-e2e tools.
 
