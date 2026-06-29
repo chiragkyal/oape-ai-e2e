@@ -2,9 +2,6 @@
 # dispatch.sh — Reads ci-monitor-result.json and invokes further oape-ai-e2e
 # tools based on the failure classification.
 #
-# Phase 1: Logs planned actions without executing them.
-# Phase 2+: Branches will invoke auto-fix, Claude analysis, /retest, etc.
-#
 # This script is the bridge between "CI monitoring" (monitor.sh) and
 # "further processing" (auto-fix, Claude, retest). It runs immediately
 # after monitor.sh in the same CI job, with the oape-ai-e2e repo cloned
@@ -14,16 +11,23 @@
 #   RESULT_FILE  — Path to ci-monitor-result.json (default: /tmp/ci-monitor-result.json)
 #
 # Optional environment:
-#   OAPE_ROOT    — Root of the cloned oape-ai-e2e repo (default: /app)
-#   DRY_RUN      — If "true", never execute real actions even in Phase 2+
-#   PHASE        — Override dispatch phase (default: "1")
+#   OAPE_ROOT              — Root of the cloned oape-ai-e2e repo (default: /app)
+#   DRY_RUN                — If "true", log actions without executing them
+#   PHASE                  — Override dispatch phase (default: "2")
+#   RETEST_INFRA_FLAKES    — If "true", post /test for infra flakes (default: "false")
+#   MAX_RETESTS_PER_RUN    — Max retest comments per run (default: 2)
+#   WORK_DIR               — Working directory with CI logs (default: /tmp/ci-monitor)
 
 set -euo pipefail
 
 RESULT_FILE="${RESULT_FILE:-/tmp/ci-monitor-result.json}"
 OAPE_ROOT="${OAPE_ROOT:-/app}"
 DRY_RUN="${DRY_RUN:-false}"
-PHASE="${PHASE:-1}"
+PHASE="${PHASE:-2}"
+RETEST_INFRA_FLAKES="${RETEST_INFRA_FLAKES:-false}"
+MAX_RETESTS_PER_RUN="${MAX_RETESTS_PER_RUN:-2}"
+WORK_DIR="${WORK_DIR:-/tmp/ci-monitor}"
+REPORT_MARKER="<!-- oape-ci-monitor -->"
 
 # ---------------------------------------------------------------------------
 # Prechecks
@@ -44,12 +48,8 @@ fi
 OVERALL_STATUS=$(jq -r '.overall_status' "$RESULT_FILE")
 TRIGGER_COUNT=$(jq '.trigger_actions | length' "$RESULT_FILE")
 PR_URL=$(jq -r '.pr_url' "$RESULT_FILE")
-# Used in Phase 2+ action execution (currently commented out)
-# shellcheck disable=SC2034
 OWNER=$(jq -r '.owner' "$RESULT_FILE")
-# shellcheck disable=SC2034
 REPO=$(jq -r '.repo' "$RESULT_FILE")
-# shellcheck disable=SC2034
 PR_NUMBER=$(jq -r '.pr_number' "$RESULT_FILE")
 
 echo "============================================"
@@ -59,6 +59,7 @@ echo "  Status: ${OVERALL_STATUS}"
 echo "  Trigger Actions: ${TRIGGER_COUNT}"
 echo "  Phase: ${PHASE}"
 echo "  Dry Run: ${DRY_RUN}"
+echo "  Retest Infra Flakes: ${RETEST_INFRA_FLAKES}"
 echo "============================================"
 
 # ---------------------------------------------------------------------------
@@ -75,10 +76,23 @@ if [[ "$TRIGGER_COUNT" -eq 0 ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Pre-compute: are ALL failures infra-flakes?
+# ---------------------------------------------------------------------------
+ALL_INFRA_FLAKE="false"
+non_retest_count=$(jq '[.trigger_actions[] | select(.action != "retest")] | length' "$RESULT_FILE")
+if [[ "$non_retest_count" -eq 0 && "$TRIGGER_COUNT" -gt 0 ]]; then
+  ALL_INFRA_FLAKE="true"
+fi
+
+# ---------------------------------------------------------------------------
 # Dispatch each action
 # ---------------------------------------------------------------------------
 echo "[dispatch] Processing ${TRIGGER_COUNT} trigger action(s)..."
 echo ""
+
+ACTIONS_TAKEN_FILE="${WORK_DIR}/dispatch-actions.txt"
+: > "$ACTIONS_TAKEN_FILE"
+RETEST_COUNT=0
 
 jq -c '.trigger_actions[]' "$RESULT_FILE" | while IFS= read -r entry; do
   action=$(echo "$entry" | jq -r '.action')
@@ -88,57 +102,73 @@ jq -c '.trigger_actions[]' "$RESULT_FILE" | while IFS= read -r entry; do
 
   case "$action" in
 
-    # --- Retest: post /retest for infra flakes ---
+    # --- Retest: post /test for infra flakes ---
     retest)
-      if [[ "$PHASE" == "1" ]]; then
-        echo "  -> Phase 1: Would post /retest for ${job} (not executed)"
+      if [[ "$RETEST_INFRA_FLAKES" != "true" ]]; then
+        echo "  -> Auto-retest disabled (set RETEST_INFRA_FLAKES=true to enable)"
+      elif [[ "$ALL_INFRA_FLAKE" != "true" ]]; then
+        echo "  -> Skipping retest: not all failures are infra-flakes (mixed failure types)"
+      elif [[ "$RETEST_COUNT" -ge "$MAX_RETESTS_PER_RUN" ]]; then
+        echo "  -> Retest limit reached (${RETEST_COUNT}/${MAX_RETESTS_PER_RUN})"
       else
-        echo "  -> Posting /retest for infra-flake: ${job}"
-        if [[ "$DRY_RUN" != "true" ]]; then
-          # Phase 2+: uncomment to enable
-          # gh pr comment "$PR_NUMBER" --repo "${OWNER}/${REPO}" \
-          #   --body "/retest" 2>/dev/null || true
-          echo "  -> (auto-retest not yet enabled)"
-        else
-          echo "  -> DRY RUN: Would post /retest"
+        # Extract short job name (strip pull-ci-<owner>-<repo>-<branch>- prefix)
+        # shellcheck disable=SC2001
+        short_name=$(echo "$job" | sed "s/^pull-ci-${OWNER}-${REPO}-[^-]*-//")
+        if [[ -z "$short_name" || "$short_name" == "$job" ]]; then
+          echo "  -> WARN: Could not extract short job name, falling back to /retest"
+          short_name=""
         fi
+
+        if [[ -n "$short_name" ]]; then
+          retest_cmd="/test ${short_name}"
+        else
+          retest_cmd="/retest"
+        fi
+
+        if [[ "$DRY_RUN" != "true" ]]; then
+          echo "  -> Posting '${retest_cmd}' for infra-flake: ${job}"
+          gh pr comment "$PR_NUMBER" --repo "${OWNER}/${REPO}" \
+            --body "$retest_cmd" 2>/dev/null || true
+          echo "posted \`${retest_cmd}\` for infra-flake \`${job}\`" >> "$ACTIONS_TAKEN_FILE"
+        else
+          echo "  -> DRY RUN: Would post '${retest_cmd}' for ${job}"
+        fi
+        RETEST_COUNT=$((RETEST_COUNT + 1))
       fi
       ;;
 
     # --- Auto-fix for lint failures ---
     auto-fix-lint)
-      if [[ "$PHASE" == "1" ]]; then
-        echo "  -> Phase 1: Would run auto-fix for lint failure on ${job} (not executed)"
+      auto_fix_script="${OAPE_ROOT}/scripts/pr-agent/auto-fix.sh"
+      if [[ ! -x "$auto_fix_script" ]]; then
+        echo "  -> Auto-fix script not found at ${auto_fix_script}"
       else
-        auto_fix_script="${OAPE_ROOT}/scripts/pr-agent/auto-fix.sh"
-        if [[ -x "$auto_fix_script" ]]; then
-          echo "  -> Running auto-fix for lint failure: ${job}"
-          if [[ "$DRY_RUN" != "true" ]]; then
-            "$auto_fix_script" --pr-url "$PR_URL" --category lint-failure || true
-          else
-            echo "  -> DRY RUN: Would run ${auto_fix_script}"
+        echo "  -> Running auto-fix for lint failure: ${job}"
+        fix_output=""
+        fix_args=(--pr-url "$PR_URL" --category lint-failure --job "$job" --log-dir "$WORK_DIR")
+        if [[ "$DRY_RUN" == "true" ]]; then
+          fix_args+=(--dry-run)
+        fi
+
+        if fix_output=$("$auto_fix_script" "${fix_args[@]}" 2>&1); then
+          echo "$fix_output"
+          # Extract commit SHA from auto-fix.sh output
+          fix_sha=$(echo "$fix_output" | grep -oP 'Pushed fix: \K[a-f0-9]+' || true)
+          if [[ -n "$fix_sha" ]]; then
+            echo "auto-fixed \`lint-failure\` (commit ${fix_sha})" >> "$ACTIONS_TAKEN_FILE"
+          elif [[ "$DRY_RUN" != "true" ]]; then
+            echo "auto-fix attempted for \`lint-failure\` on \`${job}\` (no changes needed)" >> "$ACTIONS_TAKEN_FILE"
           fi
         else
-          echo "  -> Auto-fix script not available at ${auto_fix_script} (Phase 2+)"
+          echo "$fix_output"
+          echo "  -> Auto-fix failed for ${job} (non-fatal, continuing)"
         fi
       fi
       ;;
 
     # --- Investigate: Claude analysis for complex failures ---
     investigate)
-      if [[ "$PHASE" == "1" ]]; then
-        echo "  -> Phase 1: Would invoke Claude analysis for ${job} (not executed)"
-      else
-        echo "  -> Claude analysis requested for: ${job}"
-        if [[ "$DRY_RUN" != "true" ]]; then
-          # Phase 2+: invoke Claude Code CLI or analysis script
-          # "${OAPE_ROOT}/scripts/pr-agent/log-analyzer.sh" \
-          #   --pr-url "$PR_URL" --job "$job" || true
-          echo "  -> (Claude analysis not yet enabled)"
-        else
-          echo "  -> DRY RUN: Would invoke Claude analysis"
-        fi
-      fi
+      echo "  -> Claude analysis not yet available (Step 4 — pending PR #60 merge)"
       ;;
 
     *)
@@ -148,6 +178,34 @@ jq -c '.trigger_actions[]' "$RESULT_FILE" | while IFS= read -r entry; do
 
   echo ""
 done
+
+# ---------------------------------------------------------------------------
+# Post-dispatch report update
+# ---------------------------------------------------------------------------
+if [[ -s "$ACTIONS_TAKEN_FILE" && "$DRY_RUN" != "true" ]]; then
+  echo "[dispatch] Updating CI monitor report with actions taken..."
+
+  existing_comment_id=$(gh api "repos/${OWNER}/${REPO}/issues/${PR_NUMBER}/comments" \
+    --jq ".[] | select(.body | contains(\"${REPORT_MARKER}\")) | .id" 2>/dev/null | head -1 || true)
+
+  if [[ -n "$existing_comment_id" ]]; then
+    existing_body=$(gh api "repos/${OWNER}/${REPO}/issues/comments/${existing_comment_id}" \
+      --jq '.body' 2>/dev/null || true)
+
+    actions_section=$'\n---\n### Actions Taken by oape-ci-monitor\n'
+    while IFS= read -r line; do
+      actions_section+="- ${line}"$'\n'
+    done < "$ACTIONS_TAKEN_FILE"
+    actions_section+=$'\n*Updated on '"$(date -u +'%Y-%m-%d %H:%M UTC')"'*'
+
+    updated_body="${existing_body}${actions_section}"
+    gh api "repos/${OWNER}/${REPO}/issues/comments/${existing_comment_id}" \
+      -X PATCH -f body="$updated_body" > /dev/null 2>&1 || true
+    echo "[dispatch] Report updated with actions taken"
+  else
+    echo "[dispatch] WARN: Could not find CI monitor comment to update"
+  fi
+fi
 
 # ---------------------------------------------------------------------------
 # Summary
@@ -162,7 +220,11 @@ CATEGORY_SUMMARY=$(jq -r '
 
 echo "[dispatch] Failure categories: ${CATEGORY_SUMMARY}"
 
-if [[ "$PHASE" == "1" ]]; then
-  echo "[dispatch] Phase 1 mode — all actions logged but not executed"
-  echo "[dispatch] To enable actions, set PHASE=2 (requires Phase 2 scripts)"
+if [[ -s "$ACTIONS_TAKEN_FILE" ]]; then
+  echo "[dispatch] Actions taken:"
+  while IFS= read -r line; do
+    echo "  - ${line}"
+  done < "$ACTIONS_TAKEN_FILE"
+else
+  echo "[dispatch] No actions were executed this run"
 fi

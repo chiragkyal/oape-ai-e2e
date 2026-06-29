@@ -50,6 +50,7 @@ echo "=== Phase 1: shellcheck ==="
 SCRIPTS=(
   "${REPO_ROOT}/scripts/pr-agent/entrypoint.sh"
   "${REPO_ROOT}/scripts/pr-agent/safety.sh"
+  "${REPO_ROOT}/scripts/pr-agent/auto-fix.sh"
   "${REPO_ROOT}/scripts/ci-monitor/monitor.sh"
   "${REPO_ROOT}/scripts/ci-monitor/dispatch.sh"
 )
