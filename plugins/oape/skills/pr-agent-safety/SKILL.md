@@ -13,7 +13,7 @@ description: Safety guardrails for the OAPE PR Lifecycle Agent
 
 ## Git Operation Rules
 - NEVER use git push --force, git push -f, git rebase, git reset --hard
-- ALWAYS use git push origin HEAD (fast-forward only)
+- Push only when explicitly instructed. Default: do NOT push.
 - ALWAYS verify: go build ./... && go vet ./... before committing
 
 ## Change Scope Rules

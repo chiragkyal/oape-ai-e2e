@@ -130,7 +130,7 @@ def check_review_thread(owner: str, repo: str, pr_number: int, thread_id: str) -
 
     comments = target_thread["comments"]["nodes"]
     for comment in comments:
-        author = comment["author"]["login"] if comment["author"] else ""
+        author = comment.get("author", {}).get("login", "") if comment.get("author") else ""
         body = comment.get("body", "")
         if is_bot_reply(author, body):
             return {

@@ -44,38 +44,50 @@ def run_gh(args: list[str]) -> Any:
 def fetch_resolved_thread_ids(owner: str, repo: str, pr: int) -> dict[int, bool]:
     """Fetch resolved status for review threads, keyed by first comment's databaseId."""
     query = '''
-    query($owner: String!, $repo: String!, $number: Int!) {
+    query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
       repository(owner: $owner, name: $repo) {
         pullRequest(number: $number) {
-          reviewThreads(first: 100) {
+          reviewThreads(first: 100, after: $cursor) {
             nodes {
               isResolved
               comments(first: 1) {
                 nodes { databaseId }
               }
             }
+            pageInfo { hasNextPage endCursor }
           }
         }
       }
     }
     '''
-    try:
-        result = run_gh([
-            "api", "graphql",
-            "-f", f"query={query}",
-            "-f", f"owner={owner}",
-            "-f", f"repo={repo}",
-            "-F", f"number={pr}",
-        ])
-    except RuntimeError:
-        return {}
-
     resolved: dict[int, bool] = {}
-    threads = result["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
-    for thread in threads:
-        comments = thread.get("comments", {}).get("nodes", [])
-        if comments and comments[0].get("databaseId"):
-            resolved[comments[0]["databaseId"]] = thread["isResolved"]
+    cursor = None
+
+    while True:
+        try:
+            args = [
+                "api", "graphql",
+                "-f", f"query={query}",
+                "-f", f"owner={owner}",
+                "-f", f"repo={repo}",
+                "-F", f"number={pr}",
+            ]
+            if cursor:
+                args.extend(["-f", f"cursor={cursor}"])
+            result = run_gh(args)
+        except RuntimeError:
+            return resolved
+
+        threads_data = result["data"]["repository"]["pullRequest"]["reviewThreads"]
+        for thread in threads_data["nodes"]:
+            comments = thread.get("comments", {}).get("nodes", [])
+            if comments and comments[0].get("databaseId"):
+                resolved[comments[0]["databaseId"]] = thread["isResolved"]
+
+        if not threads_data["pageInfo"]["hasNextPage"]:
+            break
+        cursor = threads_data["pageInfo"]["endCursor"]
+
     return resolved
 
 
@@ -182,7 +194,7 @@ def filter_comments(
 
 ACKNOWLEDGMENTS = frozenset({
     "lgtm", "looks good", "looks good to me", "+1", "approved",
-    "thanks!", "thank you", "thanks", "ship it", "nit: lgtm",
+    "thank you", "thanks", "ship it", "nit: lgtm",
 })
 
 
@@ -254,7 +266,7 @@ def check_replied(owner: str, repo: str, pr: int, comment_id: int, comment_type:
 
     type_map = {
         "inline": "review_comment",
-        "review": "issue_comment",
+        "review": "review_thread",
         "issue": "issue_comment",
     }
     check_type = type_map.get(comment_type, "review_comment")
@@ -266,9 +278,12 @@ def check_replied(owner: str, repo: str, pr: int, comment_id: int, comment_type:
             text=True,
             timeout=60,
         )
+        if result.returncode == 2:
+            print(f"[build_threads] WARNING: check_replied error for {comment_id}, defaulting to safe-to-reply", file=sys.stderr)
+            return True
         return result.returncode == 0
     except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False
+        return True
 
 
 def build_thread_output(
