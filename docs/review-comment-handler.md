@@ -60,17 +60,15 @@ This guarantees the review handler runs regardless of CI status. The `entrypoint
 
 **Rejected alternative:** Restructuring `dispatch.sh` to not exit early — couples review handling to CI failure processing unnecessarily.
 
-### Decision 2: Agentic Claude (no `--print`)
+### Decision 2: Claude in `--print` mode with tool use
 
-The review handler invokes `claude` in agentic mode (without `--print`). Claude autonomously:
+The review handler invokes `claude -p` (print mode) with `--permission-mode bypassPermissions` and `--allowedTools`. In print mode, Claude still has full tool access — it autonomously:
 - Reads files, makes edits
 - Runs `go build ./...` and `go vet ./...`
-- Commits and pushes via `git push origin HEAD`
+- Commits via `git commit`
 - Posts replies via `gh api`
 
-Tool restrictions via `--allowedTools` prevent destructive operations. A `timeout 300` wrapper caps each invocation at 5 minutes.
-
-**Rejected alternative:** `--print` mode where Claude outputs text and bash parses/executes — adds fragile output parsing and defeats the purpose of using an AI agent.
+Print mode is preferred for CI because it processes the prompt, executes tools, and exits deterministically — no interactive session. Tool restrictions via `--allowedTools` prevent destructive operations (push is excluded — all commits are batched and pushed by the outer script). A `timeout 300` wrapper caps each invocation at 5 minutes.
 
 ### Decision 3: Claude CLI prerequisite — graceful degradation
 
@@ -78,7 +76,7 @@ The handler checks for `claude --version` at startup and exits 0 with a warning 
 
 ### Decision 4: One Claude invocation per thread
 
-Each review thread gets its own `claude` invocation with `timeout 300` and `--max-turns 20`. Per-thread is simpler, more auditable, and prevents one complex thread from consuming the entire budget.
+Each review thread gets its own `claude` invocation with `timeout 300`. Per-thread is simpler, more auditable, and prevents one complex thread from consuming the entire budget.
 
 ### Decision 5: `check_replied.py` as sole dedup mechanism
 
@@ -342,38 +340,18 @@ review-handler.sh --pr-url <URL> [--dry-run]
        file_diff=$(git diff "origin/${BASE_BRANCH}...HEAD" -- "$file" 2>/dev/null || echo "(diff not available)")
      fi
 
-     # Invoke agentic Claude (no --print)
+     # Invoke Claude in print mode with tool use
      local skills_dir="${OAPE_ROOT:-/app}/plugins/oape/skills"
      local safety_skill="${skills_dir}/pr-agent-safety/SKILL.md"
      local review_skill="${skills_dir}/address-review-comments/SKILL.md"
      local check_replied="${skills_dir}/address-review-comments/check_replied.py"
 
      timeout 300 claude \
-       --max-turns 20 \
-       -p "$(cat "$safety_skill" 2>/dev/null || echo "")
-   $(cat "$review_skill" 2>/dev/null || echo "")
-
-   You are the OAPE PR agent responding to a review comment on PR #${PR_NUMBER} in ${OWNER}/${REPO}.
-   The PR branch is checked out in the current directory.
-
-   INSTRUCTIONS:
-   - If the reviewer requests a code change, make the change, verify with 'go build ./...' and
-     'go vet ./...', commit with 'fix: <description> — oape-pr-agent', push with 'git push origin HEAD'.
-     Then reply to the review comment summarizing what you changed.
-   - If the reviewer asks a question, reply with a concise explanation. Do NOT change code.
-   - Reply exactly once per thread.
-   - All replies must end with: ---\n*AI-assisted response via Claude Code*
-   - Before posting a reply, run: python3 ${check_replied} ${OWNER} ${REPO} ${PR_NUMBER} <comment_id> --type <type>
-     If exit code is 1 (already replied) or 2 (error), do NOT post.
-   - If unsure whether a change is correct, explain your uncertainty instead of guessing.
-
-   THREAD CONTEXT (${thread_type} comment):
-   $(cat "$thread_file")
-
-   ${file:+FILE DIFF ($file):
-   $file_diff}" \
-       --allowedTools "Bash(git diff*),Bash(git add*),Bash(git commit*),Bash(git push origin HEAD),Bash(git log*),Bash(git status*),Bash(go *),Bash(make *),Bash(gh api*),Bash(gh pr comment*),Bash(python3*),Read,Edit" \
-       2>"${RUNNER_TEMP:-/tmp}/claude-review-stderr-${thread_id}.txt" || true
+       -p \
+       --permission-mode bypassPermissions \
+       --allowedTools "Bash(git diff*),Bash(git add*),Bash(git commit*),Bash(git log*),Bash(git status*),Bash(git stash*),Bash(go *),Bash(make *),Bash(gh api*),Bash(gh pr comment*),Bash(python3*),Read,Edit" \
+       < "$prompt_file" \
+       2>"${RUNNER_TEMP:-/tmp}/claude-review-stderr-${thread_id}.txt" || claude_exit=$?
 
      # Check for new commits
      local new_commits
@@ -395,8 +373,7 @@ review-handler.sh --pr-url <URL> [--dry-run]
 
    **Design choices:**
    - `timeout 300` wrapper (5 min cap per invocation)
-   - `--max-turns 20` (bounds agentic execution)
-   - No `--print` flag (agentic mode)
+   - `-p` (print mode) with `--permission-mode bypassPermissions` — deterministic exit for CI
    - `Write` excluded from `--allowedTools` (only `Edit` — Claude should modify existing files, not create new ones)
    - No `category` passed — Claude determines it from the comment text
 
@@ -654,14 +631,14 @@ The review handler inherits all existing guardrails from `safety.sh`:
 | Dry run | `DRY_RUN=true` | Full analysis without modifications |
 | Claude tool restriction | `--allowedTools` | Whitelist of safe operations |
 | Timeout | `timeout 300` | 5 min cap per Claude invocation |
-| Turn limit | `--max-turns 20` | Bounds agentic execution per thread |
+| Permission mode | `bypassPermissions` | Auto-approve tool calls in CI |
 | Duplicate prevention | `check_replied.py` | Prevents double-posting |
 | Compilation verification | Claude prompt + skill | `go build` / `go vet` before commit |
 
 **Claude's `--allowedTools` whitelist:**
 ```
-Bash(git diff*), Bash(git add*), Bash(git commit*), Bash(git push origin HEAD),
-Bash(git log*), Bash(git status*), Bash(go *), Bash(make *),
+Bash(git diff*), Bash(git add*), Bash(git commit*),
+Bash(git log*), Bash(git status*), Bash(git stash*), Bash(go *), Bash(make *),
 Bash(gh api*), Bash(gh pr comment*), Bash(python3*), Read, Edit
 ```
 
@@ -824,6 +801,6 @@ The rehearsal detection block automatically switches from `openshift/release` to
 ## Known Limitations & Future Work
 
 1. **CI cascade** — each pushed commit re-triggers all Prow presubmits. Mitigated by commit limit (5/PR). Future: batch multiple review fixes into a single commit.
-2. **No file-level enforcement on Claude** — `--allowedTools` restricts tools but not file paths. The safety SKILL.md is a prompt instruction, not enforcement. Future: add `check_blocklist()` validation after Claude runs, before the push.
-3. **No cumulative spend tracking** — if `--max-budget-usd` is added later, it would need per-run tracking across threads. Current bound is `--max-turns 20` per thread.
+2. **Post-commit guardrails** — `check_blocklist()` validation runs after Claude commits, reverting protected file modifications and oversized diffs before push. The safety SKILL.md provides prompt-level guidance; the post-commit check enforces it.
+3. **No cumulative spend tracking** — if `--max-budget-usd` is added later, it would need per-run tracking across threads. Current bound is `timeout 300` (5 min) per thread.
 4. **No GitHub API rate limiting** — heavily-reviewed PRs could hit rate limits. Future: add rate limit checking in `build_threads.py`.

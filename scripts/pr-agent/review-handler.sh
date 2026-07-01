@@ -77,8 +77,8 @@ if ! command -v claude &>/dev/null; then
 fi
 
 if ! command -v python3 &>/dev/null; then
-  echo "[review] python3 not available — skipping review comment handling"
-  exit 0
+  echo "[review] python3 not available — required for comment processing" >&2
+  exit 1
 fi
 
 if ! command -v jq &>/dev/null; then
@@ -126,12 +126,18 @@ clone_and_checkout() {
     git config user.name "$BOT_USER"
     git config user.email "267347085+${BOT_USER}@users.noreply.github.com"
 
-    # For fork-based PRs, push to the fork (head repo), not the upstream
+    # For fork-based PRs, push to the fork (head repo) via a separate remote
     local head_repo
     head_repo=$(gh pr view "$pr_number" --repo "${owner}/${repo}" --json headRepository,headRepositoryOwner \
       -q '"\(.headRepositoryOwner.login)/\(.headRepository.name)"' 2>/dev/null || echo "${owner}/${repo}")
-    PUSH_REMOTE_URL="https://x-access-token:${GH_TOKEN}@github.com/${head_repo}.git"
-    git remote set-url origin "$PUSH_REMOTE_URL"
+    if [[ "$head_repo" != "${owner}/${repo}" ]]; then
+      git remote add fork "https://x-access-token:${GH_TOKEN}@github.com/${head_repo}.git" 2>/dev/null || \
+        git remote set-url fork "https://x-access-token:${GH_TOKEN}@github.com/${head_repo}.git"
+      PUSH_REMOTE="fork"
+    else
+      git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${head_repo}.git"
+      PUSH_REMOTE="origin"
+    fi
   fi
 }
 
@@ -332,9 +338,8 @@ main() {
 
   echo "0" > "${RUNNER_TEMP:-/tmp}/pr-review-commits-${PR_NUMBER}.txt"
 
-  local addressed=0
+  local addressed=0 tid
   while IFS= read -r thread; do
-    local tid
     tid=$(echo "$thread" | jq -r '.thread_id')
     echo "[review] Addressing thread ${tid}..."
     address_thread "$thread"
@@ -351,26 +356,30 @@ main() {
     echo "[review] Rebasing onto latest remote before push..."
     local branch_name
     branch_name=$(git branch --show-current)
-    git fetch origin "$branch_name" 2>/dev/null || true
-    if ! git rebase "origin/${branch_name}" 2>/dev/null; then
-      echo "[review] Rebase conflict — aborting rebase and pushing without rebase" >&2
+    local push_remote="${PUSH_REMOTE:-origin}"
+    git fetch "$push_remote" "$branch_name" 2>/dev/null || true
+    if ! git rebase "${push_remote}/${branch_name}" 2>/dev/null; then
+      echo "[review] Rebase conflict — aborting rebase, skipping push" >&2
       git rebase --abort 2>/dev/null || git rebase --quit 2>/dev/null || true
       if [[ -d ".git/rebase-merge" ]] || [[ -d ".git/rebase-apply" ]]; then
         echo "[review] ERROR: Rebase state stuck — cannot push safely" >&2
-        return 1
       fi
+      echo "[review] WARNING: ${total_commits} commit(s) not pushed due to rebase conflict — human intervention needed" >&2
+      audit_log "push-skipped" "review-code-change" "" "" "rebase conflict prevented push of ${total_commits} commit(s)"
+      return 1
     fi
     echo "[review] Pushing ${total_commits} commit(s)..."
-    if ! git push origin HEAD; then
-      echo "[review] Push failed — attempting force-push with lease..." >&2
-      git push --force-with-lease origin HEAD
+    if ! git push "$push_remote" HEAD; then
+      echo "[review] Push failed — remote may have diverged, skipping push" >&2
+      echo "[review] WARNING: ${total_commits} commit(s) not pushed — human intervention needed" >&2
+      audit_log "push-failed" "review-code-change" "" "" "push failed for ${total_commits} commit(s)"
+      return 1
     fi
 
     # Post-push verification
-    local local_sha remote_sha branch_name
+    local local_sha remote_sha
     local_sha=$(git log -1 --format='%H')
-    branch_name=$(git branch --show-current)
-    remote_sha=$(git ls-remote origin "refs/heads/${branch_name}" | cut -f1)
+    remote_sha=$(git ls-remote "$push_remote" "refs/heads/${branch_name}" | cut -f1)
     if [[ "$local_sha" == "$remote_sha" ]]; then
       echo "[review] Push verified — ${local_sha}"
     else

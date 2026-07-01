@@ -266,7 +266,7 @@ def check_replied(owner: str, repo: str, pr: int, comment_id: int, comment_type:
 
     type_map = {
         "inline": "review_comment",
-        "review": "review_thread",
+        "review": "review_summary",
         "issue": "issue_comment",
     }
     check_type = type_map.get(comment_type, "review_comment")

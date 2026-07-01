@@ -187,7 +187,7 @@ def check_issue_comment(owner: str, repo: str, pr_number: int, comment_id: str) 
     for comment in comments:
         if comment["created_at"] <= target_time:
             continue
-        author = comment["user"]["login"] if comment.get("user") else ""
+        author = comment.get("user", {}).get("login", "") if comment.get("user") else ""
         body = comment.get("body", "")
         if is_bot_reply(author, body):
             return {
@@ -203,6 +203,72 @@ def check_issue_comment(owner: str, repo: str, pr_number: int, comment_id: str) 
     return {
         "safe_to_reply": True,
         "reason": "no_bot_reply_after"
+    }
+
+
+def check_review_summary(owner: str, repo: str, pr_number: int, review_id: str) -> dict:
+    """Check if bot already replied after a review summary comment."""
+    try:
+        review = run_gh([
+            "api", f"repos/{owner}/{repo}/pulls/{pr_number}/reviews/{review_id}"
+        ])
+    except RuntimeError as e:
+        return {
+            "safe_to_reply": False,
+            "reason": "api_error",
+            "message": str(e)
+        }
+
+    if not review:
+        return {
+            "safe_to_reply": True,
+            "reason": "review_not_found",
+            "message": f"Review {review_id} not found"
+        }
+
+    review_time = review.get("submitted_at", "")
+    if not review_time:
+        return {
+            "safe_to_reply": True,
+            "reason": "no_timestamp"
+        }
+
+    try:
+        comments = run_gh([
+            "api", f"repos/{owner}/{repo}/issues/{pr_number}/comments", "--paginate"
+        ])
+    except RuntimeError as e:
+        return {
+            "safe_to_reply": False,
+            "reason": "api_error",
+            "message": str(e)
+        }
+
+    if not comments:
+        return {
+            "safe_to_reply": True,
+            "reason": "no_comments_found"
+        }
+
+    for comment in comments:
+        if comment.get("created_at", "") <= review_time:
+            continue
+        author = comment.get("user", {}).get("login", "") if comment.get("user") else ""
+        body = comment.get("body", "")
+        if is_bot_reply(author, body):
+            return {
+                "safe_to_reply": False,
+                "reason": "bot_replied_after_review",
+                "existing_reply": {
+                    "author": author,
+                    "created_at": comment["created_at"],
+                    "body_preview": body[:200] if body else ""
+                }
+            }
+
+    return {
+        "safe_to_reply": True,
+        "reason": "no_bot_reply_after_review"
     }
 
 
@@ -242,7 +308,7 @@ def check_review_comment(owner: str, repo: str, pr_number: int, comment_id: str)
     for comment in comments:
         in_reply_to = comment.get("in_reply_to_id")
         if in_reply_to == target_id:
-            author = comment["user"]["login"] if comment.get("user") else ""
+            author = comment.get("user", {}).get("login", "") if comment.get("user") else ""
             body = comment.get("body", "")
             if is_bot_reply(author, body):
                 return {
@@ -271,7 +337,7 @@ def main():
     parser.add_argument("comment_id", help="Comment or thread ID to check")
     parser.add_argument(
         "--type",
-        choices=["issue_comment", "review_thread", "review_comment"],
+        choices=["issue_comment", "review_thread", "review_comment", "review_summary"],
         required=True,
         help="Type of comment to check"
     )
@@ -283,6 +349,8 @@ def main():
             result = check_review_thread(args.owner, args.repo, args.pr_number, args.comment_id)
         elif args.type == "issue_comment":
             result = check_issue_comment(args.owner, args.repo, args.pr_number, args.comment_id)
+        elif args.type == "review_summary":
+            result = check_review_summary(args.owner, args.repo, args.pr_number, args.comment_id)
         elif args.type == "review_comment":
             result = check_review_comment(args.owner, args.repo, args.pr_number, args.comment_id)
         else:

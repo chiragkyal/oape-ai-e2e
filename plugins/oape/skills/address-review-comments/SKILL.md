@@ -123,7 +123,7 @@ Where `<type>` is one of: `issue_comment`, `review_thread`, or `review_comment`.
 
 - **Exit code 0**: Safe to reply (no existing bot reply found)
 - **Exit code 1**: Skip — already replied
-- **Exit code 2**: Error — do NOT post a reply (fail safe)
+- **Exit code 2**: Error — proceed with caution (default to safe-to-reply)
 
 ## Comment Grouping
 
