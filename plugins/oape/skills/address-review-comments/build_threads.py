@@ -25,6 +25,9 @@ import subprocess
 import sys
 from typing import Any
 
+CODERABBIT_USER = "coderabbitai[bot]"
+CODERABBIT_MAX_BODY_SIZE = 50000
+
 
 def run_gh(args: list[str]) -> Any:
     """Run gh CLI command and return parsed JSON."""
@@ -176,7 +179,10 @@ def filter_comments(
         if login in skip_users:
             continue
         body_len = c.get("body_len", 0)
-        if body_len > max_size:
+        is_coderabbit_review = (login == CODERABBIT_USER and comment_type == "review")
+        if not is_coderabbit_review and body_len > max_size:
+            continue
+        if is_coderabbit_review and body_len > CODERABBIT_MAX_BODY_SIZE:
             continue
         if body_len == 0:
             continue

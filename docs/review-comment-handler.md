@@ -214,7 +214,7 @@ python3 build_threads.py \
 
 **What it does:**
 1. **Two-pass fetch via `gh api`** — metadata first (IDs, authors, body length, path, line, original_line), then full body for kept items
-2. **Filter** — bot accounts (`is_skip_user`), orphaned comments (`line == null AND original_line == null`), oversized (>5000 chars). `coderabbitai` is NOT filtered (useful code review insights).
+2. **Filter** — bot accounts (`is_skip_user`), orphaned comments (`line == null AND original_line == null`), oversized (>5000 chars, except `coderabbitai[bot]` reviews which get a 50K limit so their structured review bodies pass through as single threads).
 3. **Group inline comments** by `in_reply_to_id` into threads
 4. **Group by proximity** — inline comments on the same file within 10 lines of each other
 5. **Check replied** — calls `check_replied.py` per thread, marks as skip if already replied
@@ -665,7 +665,8 @@ Bash(gh api*), Bash(gh pr comment*), Bash(python3*), Read, Edit
 | Thread with 10+ comments | Full thread passed to Claude — handles context naturally |
 | Binary/image file review | Claude cannot process — posts "requires human attention" |
 | `build_threads.py` fails | Exit 0 after logging error — no crash |
-| `coderabbitai` comments | NOT skipped — kept for Claude to process (useful code review insights) |
+| `coderabbitai` reviews | Exempted from 5000-char size filter (50K limit). Passed as a single `review` thread — Claude addresses all findings in one invocation, producing one consolidated reply. Dedup via existing `check_review_summary` (bot reply after review timestamp). |
+| `coderabbitai` issue comments | Filtered by 5000-char size limit (these are "No actionable comments" summaries, not actionable). |
 
 ---
 
