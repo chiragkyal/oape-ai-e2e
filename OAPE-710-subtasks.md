@@ -119,16 +119,16 @@ Once the PR Lifecycle Agent is complete, all open PRs in allowed repos (`team-re
 | 1 | Entrypoint + PR discovery | 1 | **Done** | `scripts/pr-agent/entrypoint.sh` — periodic/on-demand modes, state persistence, per-PR timeout |
 | 2 | CI check monitoring | 1 | **Done** | Dual implementation: lightweight in entrypoint.sh, comprehensive in `scripts/ci-monitor/monitor.sh` |
 | 3 | Failure log analysis | 1 | **Partial** | Deterministic regex classification done. Claude fallback for `unknown` deferred to Phase 2 |
-| 4 | Trivial auto-fix engine | 2 | **Partial** | `trivial-format` + `trivial-generated-files` implemented. `trivial-lint`/`trivial-import` deferred |
-| 5 | Review comment handler | 2 | **Not started** | `review-handler.sh` not yet created |
+| 4 | Trivial auto-fix engine | 2 | **Partial** | `trivial-format`, `trivial-generated-files`, and `lint-failure` (treated as format) implemented in auto-fix.sh. Fine-grained `trivial-import`/`trivial-lint` classification deferred |
+| 5 | Review comment handler | 2 | **In progress** | PR #63 (`oape-review-handler`) implements `review-handler.sh`, `address-review-comments` skill, `pr-agent-safety` skill, and Prow config. Open, not yet merged. |
 | 6 | Pipeline wiring | 1 | **Done** | `process_pr()` orchestrates all phases; `dispatch.sh` routes actions (Phase 1 = log-only) |
 | 7 | Safety guardrails | 1 | **Done** | `scripts/pr-agent/safety.sh` — blocklist, commit limits, audit log, retry helpers |
 | 8 | Status reporting | 1 | **Done** | Report generation + idempotent PR comment posting in entrypoint.sh |
 | 9 | Testing & validation | 1 | **Done** | `scripts/pr-agent/test-dry-run.sh` — shellcheck + dry-run integration + output verification |
 | 10 | `/oape:pr-agent` command | 1 | **Done** | `plugins/oape/commands/pr-agent.md` + AGENTS.md command table |
 
-**Phase 1 (report-only):** Complete — all required subtasks done, tests passing (10/10).
-**Phase 2 (auto-fix + review):** Subtasks 4 (expand), 5 (new), and 3 (Claude fallback) remain.
+**Phase 1 (report-only):** Complete — core infrastructure done (subtasks 0-2, 6-10). Subtasks 3, 4 partial.
+**Phase 2 (auto-fix + review):** Subtask 4 (expand) and 3 (Claude fallback) remain. Subtask 5 in progress via PR #63.
 
 ---
 

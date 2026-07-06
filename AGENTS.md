@@ -21,7 +21,7 @@ This project provides AI-driven tools for end-to-end feature development in Open
 | `/oape:e2e-generate <base-branch>`                               | Generate e2e test artifacts from git diff against base branch  |
 | `/oape:predict-regressions <base-branch>`                        | Predict API regressions and breaking changes from git diff     |
 | `/oape:review <ticket_id> [base_ref]`                            | Production-grade code review against Jira requirements         |
-| `/oape:implement-review-fixes <report>`                          | Automatically apply fixes from a review report                 |
+| `/oape:implement-review-fixes <review_report_json>`              | Automatically apply fixes from a review report                 |
 | `/oape:pr-agent <PR-URL> [--dry-run] [--monitor-only]`           | Monitor PR CI status, classify failures, generate report       |
 
 ### Input Sources for api-generate and api-implement
@@ -103,7 +103,7 @@ When using a design document (gist), it should contain structured implementation
 
 ## Supported Operator Repositories
 
-The allowed repositories and their base branches are defined in [`team-repos.csv`](config/team-repos.csv). DO NOT raise PRs on any repos beyond that list. Always read `team-repos.csv` to determine the correct repo URL and base branch before cloning or creating branches.
+The allowed repositories and their base branches are defined in [`team-repos.csv`](deploy/config/team-repos.csv). DO NOT raise PRs on any repos beyond that list. Always read `team-repos.csv` to determine the correct repo URL and base branch before cloning or creating branches.
 
 ---
 
@@ -120,7 +120,19 @@ The commands automatically detect which framework the repository uses:
 
 ## Project Structure
 
-
+```
+scripts/ci-monitor/       CI monitoring pipeline (monitor.sh, dispatch.sh)
+scripts/pr-agent/         PR lifecycle agent (entrypoint, auto-fix, safety, test-dry-run)
+plugins/oape/commands/    Claude Code command definitions (/oape:* commands)
+plugins/oape/skills/      Claude Code skill definitions (injected into agent prompts)
+config/                   Tool configuration (config.json)
+images/                   Container image Dockerfiles (ci-monitor, agent-worker, go-server, gh-token-minter)
+docs/                     Architecture docs, Prow config templates
+deploy/                   Kubernetes deployment manifests
+go-server/                Go HTTP server for agent job execution
+agent/                    Python agent wrapper
+gh-token-minter/          GitHub App token generation utility
+```
 
 ---
 

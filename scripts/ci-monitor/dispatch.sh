@@ -92,9 +92,11 @@ echo ""
 
 ACTIONS_TAKEN_FILE="${WORK_DIR}/dispatch-actions.txt"
 : > "$ACTIONS_TAKEN_FILE"
-RETEST_COUNT=0
+RETEST_COUNT_FILE="${WORK_DIR}/retest-count.txt"
+echo 0 > "$RETEST_COUNT_FILE"
 
-jq -c '.trigger_actions[]' "$RESULT_FILE" | while IFS= read -r entry; do
+# Use process substitution instead of pipe to avoid subshell variable scoping
+while IFS= read -r entry; do
   action=$(echo "$entry" | jq -r '.action')
   job=$(echo "$entry" | jq -r '.job')
 
@@ -104,6 +106,7 @@ jq -c '.trigger_actions[]' "$RESULT_FILE" | while IFS= read -r entry; do
 
     # --- Retest: post /test for infra flakes ---
     retest)
+      RETEST_COUNT=$(cat "$RETEST_COUNT_FILE")
       if [[ "$RETEST_INFRA_FLAKES" != "true" ]]; then
         echo "  -> Auto-retest disabled (set RETEST_INFRA_FLAKES=true to enable)"
       elif [[ "$ALL_INFRA_FLAKE" != "true" ]]; then
@@ -133,7 +136,7 @@ jq -c '.trigger_actions[]' "$RESULT_FILE" | while IFS= read -r entry; do
         else
           echo "  -> DRY RUN: Would post '${retest_cmd}' for ${job}"
         fi
-        RETEST_COUNT=$((RETEST_COUNT + 1))
+        echo $((RETEST_COUNT + 1)) > "$RETEST_COUNT_FILE"
       fi
       ;;
 
@@ -152,12 +155,39 @@ jq -c '.trigger_actions[]' "$RESULT_FILE" | while IFS= read -r entry; do
 
         if fix_output=$("$auto_fix_script" "${fix_args[@]}" 2>&1); then
           echo "$fix_output"
-          # Extract commit SHA from auto-fix.sh output
           fix_sha=$(echo "$fix_output" | grep -oP 'Pushed fix: \K[a-f0-9]+' || true)
           if [[ -n "$fix_sha" ]]; then
             echo "auto-fixed \`lint-failure\` (commit ${fix_sha})" >> "$ACTIONS_TAKEN_FILE"
           elif [[ "$DRY_RUN" != "true" ]]; then
             echo "auto-fix attempted for \`lint-failure\` on \`${job}\` (no changes needed)" >> "$ACTIONS_TAKEN_FILE"
+          fi
+        else
+          echo "$fix_output"
+          echo "  -> Auto-fix failed for ${job} (non-fatal, continuing)"
+        fi
+      fi
+      ;;
+
+    # --- Auto-fix for generated files (make generate/manifests) ---
+    auto-fix-generated)
+      auto_fix_script="${OAPE_ROOT}/scripts/pr-agent/auto-fix.sh"
+      if [[ ! -x "$auto_fix_script" ]]; then
+        echo "  -> Auto-fix script not found at ${auto_fix_script}"
+      else
+        echo "  -> Running auto-fix for generated files: ${job}"
+        fix_output=""
+        fix_args=(--pr-url "$PR_URL" --category trivial-generated-files --job "$job" --log-dir "$WORK_DIR")
+        if [[ "$DRY_RUN" == "true" ]]; then
+          fix_args+=(--dry-run)
+        fi
+
+        if fix_output=$("$auto_fix_script" "${fix_args[@]}" 2>&1); then
+          echo "$fix_output"
+          fix_sha=$(echo "$fix_output" | grep -oP 'Pushed fix: \K[a-f0-9]+' || true)
+          if [[ -n "$fix_sha" ]]; then
+            echo "auto-fixed \`trivial-generated-files\` (commit ${fix_sha})" >> "$ACTIONS_TAKEN_FILE"
+          elif [[ "$DRY_RUN" != "true" ]]; then
+            echo "auto-fix attempted for \`trivial-generated-files\` on \`${job}\` (no changes needed)" >> "$ACTIONS_TAKEN_FILE"
           fi
         else
           echo "$fix_output"
@@ -177,7 +207,7 @@ jq -c '.trigger_actions[]' "$RESULT_FILE" | while IFS= read -r entry; do
   esac
 
   echo ""
-done
+done < <(jq -c '.trigger_actions[]' "$RESULT_FILE")
 
 # ---------------------------------------------------------------------------
 # Post-dispatch report update

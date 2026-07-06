@@ -380,13 +380,14 @@ classify_single_failure() {
     'cannot compile|undefined:|syntax error|cannot use.*as.*in|'\
     'build.*failed|compilation error|cannot find package|imported and not used'; then
     echo "build-failure"
+  # Generated files out of date (check before lint — generated-files errors
+  # often co-occur with lint markers but need a different fix command)
+  elif echo "$content" | grep -qiE \
+    'generated code is out of date|make generate|make manifests|deepcopy-gen|zz_generated'; then
+    echo "generated-files-failure"
   # Lint / formatting / boilerplate failures
   elif echo "$content" | grep -qiE \
-    'gofmt|goimports|formatting differs|golangci-lint|golint|staticcheck|revive|lint.*failed'; then
-    echo "lint-failure"
-  # Generated files out of date
-  elif echo "$content" | grep -qiE \
-    'generated code is out of date|make generate|make manifests|deepcopy-gen|zz_generated|boilerplate'; then
+    'gofmt|goimports|formatting differs|golangci-lint|golint|staticcheck|revive|lint.*failed|boilerplate'; then
     echo "lint-failure"
   # Test failures
   elif echo "$content" | grep -qiE \
@@ -550,6 +551,56 @@ query_sippy_flakes() {
 }
 
 # ===========================================================================
+# Phase 4b: Fetch PR change context (lazy — only when failures exist)
+# ===========================================================================
+fetch_pr_change_context() {
+  local context_file="${WORK_DIR}/pr-change-context.json"
+
+  echo "[change-ctx] Fetching changed files for ${OWNER}/${REPO}#${PR_NUMBER}..."
+
+  local changed_files
+  changed_files=$(gh pr view "$PR_NUMBER" --repo "${OWNER}/${REPO}" \
+    --json files --jq '.files[].path' 2>/dev/null || true)
+
+  if [[ -z "$changed_files" ]]; then
+    echo "[change-ctx] Could not fetch changed files"
+    echo '{"api":0,"controller":0,"test":0,"crd":0,"rbac":0,"other":0,"files":[]}' > "$context_file"
+    return 0
+  fi
+
+  local api=0 controller=0 test=0 crd=0 rbac=0 other=0
+  local files_json="[]"
+
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    files_json=$(echo "$files_json" | jq --arg f "$f" '. + [$f]')
+    case "$f" in
+      *_types.go|*types_*.go|*/api/*)            api=$((api + 1)) ;;
+      *controller*|*reconcil*|*sync*.go)          controller=$((controller + 1)) ;;
+      *_test.go|*_test.sh)                        test=$((test + 1)) ;;
+      *crd*.yaml|*crd*.json)                      crd=$((crd + 1)) ;;
+      *rbac*.yaml|*clusterrole*.yaml)             rbac=$((rbac + 1)) ;;
+      *)                                          other=$((other + 1)) ;;
+    esac
+  done <<< "$changed_files"
+
+  jq -n \
+    --argjson api "$api" \
+    --argjson controller "$controller" \
+    --argjson test "$test" \
+    --argjson crd "$crd" \
+    --argjson rbac "$rbac" \
+    --argjson other "$other" \
+    --argjson files "$files_json" \
+    '{api:$api, controller:$controller, test:$test, crd:$crd, rbac:$rbac, other:$other, files:$files}' \
+    > "$context_file"
+
+  local total_files
+  total_files=$(echo "$files_json" | jq 'length')
+  echo "[change-ctx] PR changes: ${total_files} files (api:${api} controller:${controller} test:${test} crd:${crd} rbac:${rbac} other:${other})"
+}
+
+# ===========================================================================
 # Phase 5: Generate structured report
 # ===========================================================================
 generate_report() {
@@ -576,9 +627,55 @@ generate_report() {
     if [[ "$USE_RELEASE_CONTEXT" == "true" ]]; then
       echo "**Release Context:** available | OCP version: ${RELEASE_VERSION:-unknown}"
     fi
+
+    # PR change summary
+    local context_file="${WORK_DIR}/pr-change-context.json"
+    if [[ -f "$context_file" ]]; then
+      local ctx_total
+      ctx_total=$(jq '[.api,.controller,.test,.crd,.rbac,.other] | add' "$context_file" 2>/dev/null || echo 0)
+      if [[ "$ctx_total" -gt 0 ]]; then
+        local ctx_api ctx_ctrl ctx_test ctx_crd ctx_rbac ctx_other
+        ctx_api=$(jq '.api' "$context_file")
+        ctx_ctrl=$(jq '.controller' "$context_file")
+        ctx_test=$(jq '.test' "$context_file")
+        ctx_crd=$(jq '.crd' "$context_file")
+        ctx_rbac=$(jq '.rbac' "$context_file")
+        ctx_other=$(jq '.other' "$context_file")
+        local parts=()
+        [[ "$ctx_api" -gt 0 ]] && parts+=("${ctx_api} API")
+        [[ "$ctx_ctrl" -gt 0 ]] && parts+=("${ctx_ctrl} controller")
+        [[ "$ctx_test" -gt 0 ]] && parts+=("${ctx_test} test")
+        [[ "$ctx_crd" -gt 0 ]] && parts+=("${ctx_crd} CRD")
+        [[ "$ctx_rbac" -gt 0 ]] && parts+=("${ctx_rbac} RBAC")
+        [[ "$ctx_other" -gt 0 ]] && parts+=("${ctx_other} other")
+        local parts_str
+        parts_str=$(IFS=', '; echo "${parts[*]}")
+        echo "**PR changes:** ${ctx_total} files (${parts_str})"
+      fi
+    fi
     echo ""
 
-    # Overall status
+    # Overall status — check optional-only failures
+    local optional_failures=0
+    local required_failures_count=0
+    if [[ -f "$analysis_file" && "$failed" -gt 0 ]]; then
+      local job_manifest="${WORK_DIR}/job-manifest.json"
+      if [[ "$USE_RELEASE_CONTEXT" == "true" && -f "$job_manifest" ]]; then
+        jq -r '.[] | .job_name' "$analysis_file" 2>/dev/null | while IFS= read -r jn; do
+          local short
+          # shellcheck disable=SC2001
+          short=$(echo "$jn" | sed "s/^pull-ci-${OWNER}-${REPO}-[^-]*-//")
+          local is_opt
+          is_opt=$(jq -r --arg n "$short" '.[$n].optional // false' "$job_manifest" 2>/dev/null || echo "false")
+          if [[ "$is_opt" == "true" ]]; then
+            optional_failures=$((optional_failures + 1))
+          else
+            required_failures_count=$((required_failures_count + 1))
+          fi
+        done
+      fi
+    fi
+
     if [[ "$failed" -eq 0 && "$pending" -eq 0 ]]; then
       echo "**All ${total} CI checks passed.**"
       echo ""
@@ -627,7 +724,7 @@ generate_report() {
         echo ""
 
         # Group by category
-        for cat in "build-failure" "lint-failure" "test-failure" "install-failure" "unknown"; do
+        for cat in "build-failure" "lint-failure" "generated-files-failure" "test-failure" "install-failure" "unknown"; do
           local cat_items
           cat_items=$(jq -r --arg c "$cat" '.[] | select(.category == $c) | .job_name' "$analysis_file" 2>/dev/null || true)
           if [[ -n "$cat_items" ]]; then
@@ -694,10 +791,11 @@ generate_report() {
             fi
             # Derive action from category
             case "$jb_category" in
-              infra-flake)     jb_action="/retest" ;;
-              lint-failure)    jb_action="auto-fix" ;;
+              infra-flake)              jb_action="/retest" ;;
+              lint-failure)             jb_action="auto-fix-lint" ;;
+              generated-files-failure)  jb_action="auto-fix-generated" ;;
               build-failure|test-failure|install-failure) jb_action="investigate" ;;
-              unknown)         jb_action="investigate" ;;
+              unknown)                  jb_action="investigate" ;;
             esac
           fi
 
@@ -769,6 +867,7 @@ post_report_comment() {
 write_result_json() {
   local checks_file="${WORK_DIR}/ci-checks.json"
   local analysis_file="${WORK_DIR}/failure-analysis.json"
+  local job_manifest="${WORK_DIR}/job-manifest.json"
 
   local total passed failed pending
   total=$(jq 'length' "$checks_file")
@@ -776,16 +875,37 @@ write_result_json() {
   failed=$(jq '[.[] | select(.bucket == "fail")] | length' "$checks_file")
   pending=$(jq '[.[] | select(.bucket == "pending")] | length' "$checks_file")
 
-  local overall_status="passed"
-  if [[ "$failed" -gt 0 ]]; then
-    overall_status="failed"
-  elif [[ "$pending" -gt 0 ]]; then
-    overall_status="pending"
-  fi
-
   local failures="[]"
   if [[ -f "$analysis_file" ]]; then
     failures=$(cat "$analysis_file")
+  fi
+
+  # Enrich each failure with optional metadata from the job manifest
+  if [[ "$USE_RELEASE_CONTEXT" == "true" && -f "$job_manifest" ]]; then
+    failures=$(echo "$failures" | jq --slurpfile manifest "$job_manifest" \
+      --arg owner "$OWNER" --arg repo "$REPO" '
+      map(
+        . as $f |
+        ($f.job_name | gsub("^pull-ci-" + $owner + "-" + $repo + "-[^-]+-"; "")) as $short |
+        ($manifest[0][$short].optional // false) as $opt |
+        . + {optional: $opt}
+      )')
+  else
+    failures=$(echo "$failures" | jq 'map(. + {optional: false})')
+  fi
+
+  # Determine overall status — optional-only failures do not flip verdict
+  local overall_status="passed"
+  local required_failures
+  required_failures=$(echo "$failures" | jq '[.[] | select(.optional != true)] | length')
+  if [[ "$required_failures" -gt 0 ]]; then
+    overall_status="failed"
+  elif [[ "$failed" -gt 0 ]]; then
+    # All failures are optional
+    overall_status="passed-with-optional-failures"
+  fi
+  if [[ "$pending" -gt 0 && "$overall_status" != "failed" ]]; then
+    overall_status="pending"
   fi
 
   # Compute category counts
@@ -795,6 +915,12 @@ write_result_json() {
       group_by(.category)
       | map({key: .[0].category, value: length})
       | from_entries')
+  fi
+
+  # Include PR change context if available
+  local change_context="{}"
+  if [[ -f "${WORK_DIR}/pr-change-context.json" ]]; then
+    change_context=$(cat "${WORK_DIR}/pr-change-context.json")
   fi
 
   jq -n \
@@ -809,6 +935,7 @@ write_result_json() {
     --argjson pending "$pending" \
     --argjson failures "$failures" \
     --argjson categories "$category_counts" \
+    --argjson change_context "$change_context" \
     --arg ts "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
     '{
       pr_url: $pr_url,
@@ -824,16 +951,18 @@ write_result_json() {
         pending: $pending
       },
       failure_categories: $categories,
+      pr_change_context: $change_context,
       failures: $failures,
       trigger_actions: (
-        if $status == "failed" then
+        if ($status == "failed" or $status == "passed-with-optional-failures") then
           ($failures | map(
-            if .category == "infra-flake" then {action: "retest", job: .job_name}
-            elif .category == "lint-failure" then {action: "auto-fix-lint", job: .job_name}
-            elif .category == "build-failure" then {action: "investigate", job: .job_name}
-            elif .category == "test-failure" then {action: "investigate", job: .job_name}
-            elif .category == "install-failure" then {action: "retest", job: .job_name}
-            else {action: "investigate", job: .job_name}
+            if .category == "infra-flake" then {action: "retest", job: .job_name, optional: .optional}
+            elif .category == "lint-failure" then {action: "auto-fix-lint", job: .job_name, optional: .optional}
+            elif .category == "generated-files-failure" then {action: "auto-fix-generated", job: .job_name, optional: .optional}
+            elif .category == "build-failure" then {action: "investigate", job: .job_name, optional: .optional}
+            elif .category == "test-failure" then {action: "investigate", job: .job_name, optional: .optional}
+            elif .category == "install-failure" then {action: "retest", job: .job_name, optional: .optional}
+            else {action: "investigate", job: .job_name, optional: .optional}
             end
           ))
         else []
@@ -848,7 +977,11 @@ write_result_json() {
   trigger_count=$(jq '.trigger_actions | length' "$RESULT_FILE")
   if [[ "$trigger_count" -gt 0 ]]; then
     echo "[result] Trigger actions suggested:"
-    jq -r '.trigger_actions[] | "  - \(.action): \(.job)"' "$RESULT_FILE"
+    jq -r '.trigger_actions[] | "  - \(.action): \(.job) (optional: \(.optional))"' "$RESULT_FILE"
+  fi
+
+  if [[ "$overall_status" == "passed-with-optional-failures" ]]; then
+    echo "[result] Note: all failures are optional — PR verdict is PASS"
   fi
 }
 
@@ -857,7 +990,7 @@ write_result_json() {
 # ===========================================================================
 main() {
   echo "============================================"
-  echo "  OAPE CI Monitor — Phase 1"
+  echo "  OAPE CI Monitor — Phase 2"
   echo "  PR: ${PR_URL}"
   echo "  Dry Run: ${DRY_RUN}"
   echo "  Skip Poll: ${SKIP_POLL}"
@@ -920,6 +1053,11 @@ main() {
   echo ""
   echo "=== Phase 4: Sippy Flake History ==="
   query_sippy_flakes
+
+  # Phase 4b: PR change context (lazy — only after classification)
+  echo ""
+  echo "=== Phase 4b: PR Change Context ==="
+  fetch_pr_change_context
 
   # Phase 5: Generate report
   echo ""

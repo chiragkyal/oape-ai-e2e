@@ -99,6 +99,9 @@ fi
 if [[ -z "$TEST_PR_URL" ]]; then
   _skip "No test PR URL available (pass --pr-url or set TEST_PR_URL)"
   echo ""
+  echo "=== Phase 2b: auto-fix.sh validation ==="
+  _skip "Skipped (no test PR URL)"
+  echo ""
   echo "=== Phase 3: Output verification ==="
   _skip "Skipped (no integration test ran)"
 else
@@ -133,6 +136,32 @@ else
     _pass "entrypoint.sh exited successfully"
   else
     _fail "entrypoint.sh exited with non-zero status"
+  fi
+
+  echo ""
+
+  # =========================================================================
+  # Phase 2b: auto-fix.sh dry-run validation
+  # =========================================================================
+  echo "=== Phase 2b: auto-fix.sh dry-run test ==="
+
+  for test_cat in trivial-format trivial-import trivial-lint trivial-generated-files; do
+    echo "  Testing category: ${test_cat}"
+    if "${REPO_ROOT}/scripts/pr-agent/auto-fix.sh" \
+        --pr-url "$TEST_PR_URL" --category "$test_cat" --dry-run 2>&1 | grep -q "DRY RUN\|No changes\|not available"; then
+      _pass "auto-fix.sh --category ${test_cat} --dry-run"
+    else
+      _fail "auto-fix.sh --category ${test_cat} --dry-run"
+    fi
+  done
+
+  # Test lint-failure coarse category (triggers fine-grained refinement)
+  echo "  Testing coarse category: lint-failure"
+  if "${REPO_ROOT}/scripts/pr-agent/auto-fix.sh" \
+      --pr-url "$TEST_PR_URL" --category lint-failure --dry-run 2>&1 | grep -q "DRY RUN\|No changes\|Refined\|not available"; then
+    _pass "auto-fix.sh --category lint-failure --dry-run (fine-grained refinement)"
+  else
+    _fail "auto-fix.sh --category lint-failure --dry-run"
   fi
 
   echo ""
