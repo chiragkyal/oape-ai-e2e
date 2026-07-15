@@ -94,52 +94,10 @@ def fetch_resolved_thread_ids(owner: str, repo: str, pr: int) -> dict[int, bool]
     return resolved
 
 
-def fetch_inline_comments_meta(owner: str, repo: str, pr: int) -> list[dict]:
-    """Pass 1: Fetch inline review comment metadata."""
-    jq_expr = (
-        '[.[] | {id, user_login: .user.login, body_len: (.body | length), '
-        'path, line, original_line, in_reply_to_id, created_at, '
-        'pull_request_review_id}]'
-    )
+def fetch_paginated_meta(endpoint: str, jq_expr: str) -> list[dict]:
+    """Pass 1: Fetch paginated metadata from a GitHub API endpoint with jq filtering."""
     try:
-        data = run_gh([
-            "api", f"repos/{owner}/{repo}/pulls/{pr}/comments",
-            "--paginate", "--jq", jq_expr
-        ])
-    except RuntimeError:
-        return []
-    if isinstance(data, list) and data and isinstance(data[0], list):
-        return [item for page in data for item in page]
-    return data if isinstance(data, list) else []
-
-
-def fetch_reviews_meta(owner: str, repo: str, pr: int) -> list[dict]:
-    """Pass 1: Fetch review metadata."""
-    jq_expr = (
-        '[.[] | {id, user_login: .user.login, body_len: (.body | length), state}]'
-    )
-    try:
-        data = run_gh([
-            "api", f"repos/{owner}/{repo}/pulls/{pr}/reviews",
-            "--paginate", "--jq", jq_expr
-        ])
-    except RuntimeError:
-        return []
-    if isinstance(data, list) and data and isinstance(data[0], list):
-        return [item for page in data for item in page]
-    return data if isinstance(data, list) else []
-
-
-def fetch_issue_comments_meta(owner: str, repo: str, pr: int) -> list[dict]:
-    """Pass 1: Fetch issue (top-level) comment metadata."""
-    jq_expr = (
-        '[.[] | {id, user_login: .user.login, body_len: (.body | length), created_at}]'
-    )
-    try:
-        data = run_gh([
-            "api", f"repos/{owner}/{repo}/issues/{pr}/comments",
-            "--paginate", "--jq", jq_expr
-        ])
+        data = run_gh(["api", endpoint, "--paginate", "--jq", jq_expr])
     except RuntimeError:
         return []
     if isinstance(data, list) and data and isinstance(data[0], list):
@@ -149,14 +107,12 @@ def fetch_issue_comments_meta(owner: str, repo: str, pr: int) -> list[dict]:
 
 def fetch_full_comment(owner: str, repo: str, pr: int, comment_id: int, comment_type: str) -> dict | None:
     """Pass 2: Fetch full body for a single comment."""
-    if comment_type == "inline":
-        endpoint = f"repos/{owner}/{repo}/pulls/comments/{comment_id}"
-    elif comment_type == "review":
-        endpoint = f"repos/{owner}/{repo}/pulls/{pr}/reviews/{comment_id}"
-    elif comment_type == "issue":
-        endpoint = f"repos/{owner}/{repo}/issues/comments/{comment_id}"
-    else:
-        return None
+    endpoints = {
+        "inline": f"repos/{owner}/{repo}/pulls/comments/{comment_id}",
+        "review": f"repos/{owner}/{repo}/pulls/{pr}/reviews/{comment_id}",
+        "issue": f"repos/{owner}/{repo}/issues/comments/{comment_id}",
+    }
+    endpoint = endpoints[comment_type]
     try:
         return run_gh(["api", endpoint])
     except RuntimeError:
@@ -341,9 +297,19 @@ def main():
 
     print(f"[build_threads] Fetching comments for {args.owner}/{args.repo}#{args.pr}", file=sys.stderr)
 
-    inline_meta = fetch_inline_comments_meta(args.owner, args.repo, args.pr)
-    reviews_meta = fetch_reviews_meta(args.owner, args.repo, args.pr)
-    issue_meta = fetch_issue_comments_meta(args.owner, args.repo, args.pr)
+    inline_meta = fetch_paginated_meta(
+        f"repos/{args.owner}/{args.repo}/pulls/{args.pr}/comments",
+        '[.[] | {id, user_login: .user.login, body_len: (.body | length), '
+        'path, line, original_line, in_reply_to_id, created_at, pull_request_review_id}]',
+    )
+    reviews_meta = fetch_paginated_meta(
+        f"repos/{args.owner}/{args.repo}/pulls/{args.pr}/reviews",
+        '[.[] | {id, user_login: .user.login, body_len: (.body | length), state}]',
+    )
+    issue_meta = fetch_paginated_meta(
+        f"repos/{args.owner}/{args.repo}/issues/{args.pr}/comments",
+        '[.[] | {id, user_login: .user.login, body_len: (.body | length), created_at}]',
+    )
 
     print(f"[build_threads] Pass 1: {len(inline_meta)} inline, {len(reviews_meta)} reviews, {len(issue_meta)} issue comments", file=sys.stderr)
 
@@ -360,20 +326,11 @@ def main():
             json.dump([], f)
         return
 
-    for c in kept_inline:
-        full = fetch_full_comment(args.owner, args.repo, args.pr, c["id"], "inline")
-        if full:
-            c["body"] = full.get("body", "")
-
-    for c in kept_reviews:
-        full = fetch_full_comment(args.owner, args.repo, args.pr, c["id"], "review")
-        if full:
-            c["body"] = full.get("body", "")
-
-    for c in kept_issue:
-        full = fetch_full_comment(args.owner, args.repo, args.pr, c["id"], "issue")
-        if full:
-            c["body"] = full.get("body", "")
+    for kept, comment_type in [(kept_inline, "inline"), (kept_reviews, "review"), (kept_issue, "issue")]:
+        for c in kept:
+            full = fetch_full_comment(args.owner, args.repo, args.pr, c["id"], comment_type)
+            if full:
+                c["body"] = full.get("body", "")
 
     # Filter out pure acknowledgments after fetching full bodies
     pre_ack = len(kept_inline) + len(kept_reviews) + len(kept_issue)

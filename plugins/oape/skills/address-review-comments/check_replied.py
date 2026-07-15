@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 """
-Check if bot has already replied to a PR comment or review thread.
+Check if bot has already replied to a PR comment or review.
 
 Adapted from openshift-eng/ai-helpers address-review-pr skill.
 
 Usage:
-    check_replied.py <owner> <repo> <pr_number> <comment_id> --type <issue_comment|review_thread|review_comment>
+    check_replied.py <owner> <repo> <pr_number> <comment_id> --type <issue_comment|review_comment|review_summary>
 
 Returns:
     Exit 0: Safe to reply (no existing bot reply found)
@@ -57,96 +57,6 @@ def is_bot_reply(login: str, body: str) -> bool:
     if body and REPLY_SIGNATURE in body:
         return True
     return False
-
-
-def check_review_thread(owner: str, repo: str, pr_number: int, thread_id: str) -> dict:
-    """Check if bot already replied to a review thread."""
-    query = '''
-    query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
-      repository(owner: $owner, name: $repo) {
-        pullRequest(number: $number) {
-          reviewThreads(first: 100, after: $cursor) {
-            nodes {
-              id
-              comments(first: 100) {
-                nodes {
-                  id
-                  author { login }
-                  body
-                  createdAt
-                }
-                pageInfo {
-                  hasNextPage
-                  endCursor
-                }
-              }
-            }
-            pageInfo {
-              hasNextPage
-              endCursor
-            }
-          }
-        }
-      }
-    }
-    '''
-
-    all_threads = []
-    cursor = None
-
-    while True:
-        args = [
-            "api", "graphql",
-            "-f", f"query={query}",
-            "-f", f"owner={owner}",
-            "-f", f"repo={repo}",
-            "-F", f"number={pr_number}"
-        ]
-        if cursor:
-            args.extend(["-f", f"cursor={cursor}"])
-
-        result = run_gh(args)
-
-        threads_data = result["data"]["repository"]["pullRequest"]["reviewThreads"]
-        all_threads.extend(threads_data["nodes"])
-
-        page_info = threads_data["pageInfo"]
-        if not page_info["hasNextPage"]:
-            break
-        cursor = page_info["endCursor"]
-
-    target_thread = None
-    for thread in all_threads:
-        if thread["id"] == thread_id:
-            target_thread = thread
-            break
-
-    if not target_thread:
-        return {
-            "safe_to_reply": True,
-            "reason": "thread_not_found",
-            "message": f"Thread {thread_id} not found - may have been resolved"
-        }
-
-    comments = target_thread["comments"]["nodes"]
-    for comment in comments:
-        author = comment.get("author", {}).get("login", "") if comment.get("author") else ""
-        body = comment.get("body", "")
-        if is_bot_reply(author, body):
-            return {
-                "safe_to_reply": False,
-                "reason": "bot_already_replied",
-                "existing_reply": {
-                    "author": author,
-                    "created_at": comment["createdAt"],
-                    "body_preview": body[:200] if body else ""
-                }
-            }
-
-    return {
-        "safe_to_reply": True,
-        "reason": "no_bot_reply_found"
-    }
 
 
 def check_issue_comment(owner: str, repo: str, pr_number: int, comment_id: str) -> dict:
@@ -337,7 +247,7 @@ def main():
     parser.add_argument("comment_id", help="Comment or thread ID to check")
     parser.add_argument(
         "--type",
-        choices=["issue_comment", "review_thread", "review_comment", "review_summary"],
+        choices=["issue_comment", "review_comment", "review_summary"],
         required=True,
         help="Type of comment to check"
     )
@@ -345,18 +255,12 @@ def main():
     args = parser.parse_args()
 
     try:
-        if args.type == "review_thread":
-            result = check_review_thread(args.owner, args.repo, args.pr_number, args.comment_id)
-        elif args.type == "issue_comment":
+        if args.type == "issue_comment":
             result = check_issue_comment(args.owner, args.repo, args.pr_number, args.comment_id)
         elif args.type == "review_summary":
             result = check_review_summary(args.owner, args.repo, args.pr_number, args.comment_id)
         elif args.type == "review_comment":
             result = check_review_comment(args.owner, args.repo, args.pr_number, args.comment_id)
-        else:
-            result = {"error": f"Unknown type: {args.type}"}
-            print(json.dumps(result, indent=2))
-            sys.exit(2)
 
         print(json.dumps(result, indent=2))
         sys.exit(0 if result.get("safe_to_reply", False) else 1)

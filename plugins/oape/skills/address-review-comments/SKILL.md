@@ -119,7 +119,7 @@ Before posting ANY reply, verify you haven't already responded using `check_repl
 python3 check_replied.py <owner> <repo> <pr_number> <comment_id> --type <type>
 ```
 
-Where `<type>` is one of: `issue_comment`, `review_thread`, or `review_comment`.
+Where `<type>` is one of: `issue_comment`, `review_comment`, or `review_summary`.
 
 - **Exit code 0**: Safe to reply (no existing bot reply found)
 - **Exit code 1**: Skip — already replied

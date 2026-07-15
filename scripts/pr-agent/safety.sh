@@ -26,7 +26,6 @@ AUDIT_LOG="${RUNNER_TEMP:-/tmp}/pr-agent-audit-${GITHUB_RUN_ID:-${BUILD_ID:-loca
 # and dependency lock files. Go source files that operate on Kubernetes
 # Secret/Token resources are NOT blocked — only files that store secrets.
 
-# Default patterns (go.mod and go.sum blocked)
 BLOCKED_PATTERNS='\.(key|pem|crt|cert|p12|pfx)$'
 BLOCKED_PATTERNS+='|\.env$'
 BLOCKED_PATTERNS+='|credentials\.'
@@ -37,30 +36,13 @@ BLOCKED_PATTERNS+='|(^|/)Makefile$'
 BLOCKED_PATTERNS+='|rbac/.*\.yaml|clusterrole.*\.yaml'
 BLOCKED_PATTERNS+='|go\.mod$|go\.sum$'
 
-# Relaxed patterns for trivial-generated-files (go.mod/go.sum allowed
-# because make generate legitimately runs go mod tidy)
-BLOCKED_PATTERNS_GENERATED='\.(key|pem|crt|cert|p12|pfx)$'
-BLOCKED_PATTERNS_GENERATED+='|\.env$'
-BLOCKED_PATTERNS_GENERATED+='|credentials\.'
-BLOCKED_PATTERNS_GENERATED+='|(^|/)kubeconfig$'
-BLOCKED_PATTERNS_GENERATED+='|(^|/)Dockerfile$|(^|/)Containerfile$|\.dockerignore$'
-BLOCKED_PATTERNS_GENERATED+='|\.github/workflows|\.tekton/'
-BLOCKED_PATTERNS_GENERATED+='|(^|/)Makefile$'
-BLOCKED_PATTERNS_GENERATED+='|rbac/.*\.yaml|clusterrole.*\.yaml'
-
 # ---------------------------------------------------------------------------
 # check_blocklist — returns 0 (safe) or 1 (blocked)
 #   $1: newline-separated file paths to check
-#   $2: (optional) failure category — "trivial-generated-files" relaxes go.mod/go.sum
 # ---------------------------------------------------------------------------
 check_blocklist() {
   local files="$1"
-  local category="${2:-}"
   local patterns="$BLOCKED_PATTERNS"
-
-  if [[ "$category" == "trivial-generated-files" ]]; then
-    patterns="$BLOCKED_PATTERNS_GENERATED"
-  fi
 
   if [[ -z "$files" ]]; then
     return 0
@@ -122,26 +104,6 @@ increment_commit_count() {
   total=$((total + 1))
   echo "$total" > "$COMMIT_COUNTER_FILE"
   echo "$total"
-}
-
-# ---------------------------------------------------------------------------
-# check_diff_size — returns 0 (within limit) or 1 (too large)
-#   Checks staged + unstaged changes against MAX_DIFF_LINES.
-# ---------------------------------------------------------------------------
-check_diff_size() {
-  local diff_lines
-  diff_lines=$(git diff --numstat | awk '{s+=$1+$2} END {print s+0}')
-  # Include untracked files that would be staged
-  local untracked_lines
-  untracked_lines=$(git ls-files --others --exclude-standard -z 2>/dev/null \
-    | xargs -0 wc -l 2>/dev/null | tail -1 | awk '{print $1+0}' || echo 0)
-  diff_lines=$((diff_lines + untracked_lines))
-
-  if [[ "$diff_lines" -gt "$MAX_DIFF_LINES" ]]; then
-    echo "GUARDRAIL: Diff too large (${diff_lines} lines > ${MAX_DIFF_LINES} limit)" >&2
-    return 1
-  fi
-  return 0
 }
 
 # ---------------------------------------------------------------------------
