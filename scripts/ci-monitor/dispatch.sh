@@ -198,7 +198,36 @@ while IFS= read -r entry; do
 
     # --- Investigate: Claude analysis for complex failures ---
     investigate)
-      echo "  -> Claude analysis not yet available (Step 4 — pending PR #60 merge)"
+      log_analyzer="${OAPE_ROOT}/scripts/pr-agent/log-analyzer.sh"
+      if [[ ! -x "$log_analyzer" ]]; then
+        echo "  -> Log analyzer not found at ${log_analyzer}"
+      else
+        echo "  -> Running Claude analysis for: ${job}"
+        analyze_output=""
+        analyze_args=(--pr-url "$PR_URL" --job "$job" --log-dir "$WORK_DIR")
+        if [[ -f "$RESULT_FILE" ]]; then
+          analyze_args+=(--result-file "$RESULT_FILE")
+        fi
+        if [[ "$DRY_RUN" == "true" ]]; then
+          analyze_args+=(--dry-run)
+        fi
+
+        if analyze_output=$("$log_analyzer" "${analyze_args[@]}" 2>&1); then
+          echo "$analyze_output"
+          analysis_file="${WORK_DIR}/failure-analysis.json"
+          if [[ -f "$analysis_file" ]]; then
+            analysis_summary=$(jq -r '.analysis[] | select(.job != "") | "\(.mode) (\(.confidence)): \(.root_cause)"' "$analysis_file" 2>/dev/null | head -1 || true)
+            if [[ -n "$analysis_summary" && "$DRY_RUN" != "true" ]]; then
+              echo "analyzed \`${job}\`: ${analysis_summary}" >> "$ACTIONS_TAKEN_FILE"
+            fi
+          elif [[ "$DRY_RUN" != "true" ]]; then
+            echo "analyzed \`${job}\` — see Claude analysis in log" >> "$ACTIONS_TAKEN_FILE"
+          fi
+        else
+          echo "$analyze_output"
+          echo "  -> Claude analysis failed for ${job} (non-fatal, continuing)"
+        fi
+      fi
       ;;
 
     *)

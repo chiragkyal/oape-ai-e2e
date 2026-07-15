@@ -47,6 +47,7 @@
 #           rm -rf /tmp/oape
 #       RUN go install golang.org/x/tools/cmd/goimports@latest && \
 #           curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b /usr/local/bin
+#       RUN dnf install -y nodejs npm && dnf clean all
 #       RUN git config --global user.name "openshift-app-platform-shift-bot" && \
 #           git config --global user.email "267347085+openshift-app-platform-shift-bot@users.noreply.github.com"
 #       RUN chmod -R g=u /opt/app-root/src

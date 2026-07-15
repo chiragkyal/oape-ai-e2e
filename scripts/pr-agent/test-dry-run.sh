@@ -51,6 +51,7 @@ SCRIPTS=(
   "${REPO_ROOT}/scripts/pr-agent/entrypoint.sh"
   "${REPO_ROOT}/scripts/pr-agent/safety.sh"
   "${REPO_ROOT}/scripts/pr-agent/auto-fix.sh"
+  "${REPO_ROOT}/scripts/pr-agent/log-analyzer.sh"
   "${REPO_ROOT}/scripts/ci-monitor/monitor.sh"
   "${REPO_ROOT}/scripts/ci-monitor/dispatch.sh"
 )
@@ -163,6 +164,36 @@ else
   else
     _fail "auto-fix.sh --category lint-failure --dry-run"
   fi
+
+  echo ""
+
+  # =========================================================================
+  # Phase 2c: log-analyzer.sh dry-run validation
+  # =========================================================================
+  echo "=== Phase 2c: log-analyzer.sh dry-run test ==="
+
+  LOG_TEST_DIR=$(mktemp -d)
+  echo 'pkg/foo.go:10: undefined: Bar' > "${LOG_TEST_DIR}/log-test-job.txt"
+  echo 'make: *** [build] Error 2' >> "${LOG_TEST_DIR}/log-test-job.txt"
+
+  echo "  Testing with synthetic build-failure log"
+  if "${REPO_ROOT}/scripts/pr-agent/log-analyzer.sh" \
+      --pr-url "$TEST_PR_URL" --log-dir "$LOG_TEST_DIR" --dry-run 2>&1 | grep -q "build-failure\|DRY RUN\|Analysis written"; then
+    _pass "log-analyzer.sh --dry-run (deterministic classification)"
+  else
+    _fail "log-analyzer.sh --dry-run"
+  fi
+
+  echo "  Testing with empty log directory"
+  EMPTY_LOG_DIR=$(mktemp -d)
+  if "${REPO_ROOT}/scripts/pr-agent/log-analyzer.sh" \
+      --pr-url "$TEST_PR_URL" --log-dir "$EMPTY_LOG_DIR" --dry-run 2>&1 | grep -q "No log files"; then
+    _pass "log-analyzer.sh --dry-run (empty dir — graceful exit)"
+  else
+    _fail "log-analyzer.sh --dry-run (empty dir)"
+  fi
+
+  rm -rf "$LOG_TEST_DIR" "$EMPTY_LOG_DIR"
 
   echo ""
 

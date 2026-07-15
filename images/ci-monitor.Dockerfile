@@ -12,6 +12,8 @@ WORKDIR /app
 RUN go install golang.org/x/tools/cmd/goimports@latest && \
     curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b /usr/local/bin
 
+RUN dnf install -y nodejs npm && dnf clean all
+
 COPY scripts/ci-monitor/ /app/scripts/ci-monitor/
 COPY scripts/pr-agent/ /app/scripts/pr-agent/
 COPY plugins /plugins
