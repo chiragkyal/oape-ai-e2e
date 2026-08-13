@@ -218,6 +218,7 @@ ${COMMIT_MESSAGES}"
   local claude_exit=0
   timeout "$CLAUDE_TIMEOUT" claude \
     -p \
+    --model "${CLAUDE_MODEL:-claude-sonnet-4-6}" \
     --permission-mode bypassPermissions \
     --allowedTools "Bash(git diff*),Bash(git add*),Bash(git commit*),Bash(git log*),Bash(git status*),Bash(git stash*),Bash(go *),Bash(make *),Bash(gh api*),Bash(gh pr comment*),Bash(python3*),Read,Edit" \
     < "$prompt_file" \
