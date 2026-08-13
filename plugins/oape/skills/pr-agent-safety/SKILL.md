@@ -14,6 +14,8 @@ description: Safety guardrails for the OAPE PR Lifecycle Agent
 ## Git Operation Rules
 - NEVER use git push --force, git push -f, git rebase, git reset --hard
 - Push only when explicitly instructed. Default: do NOT push.
+- These git rules apply to the agent (Claude). The outer review-handler.sh
+  script may rebase before batch push; the agent must not run rebase itself.
 - ALWAYS verify: go build ./... && go vet ./... before committing
 
 ## Change Scope Rules

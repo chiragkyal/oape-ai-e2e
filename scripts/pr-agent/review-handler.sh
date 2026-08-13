@@ -82,7 +82,7 @@ if ! command -v python3 &>/dev/null; then
 fi
 
 if ! command -v jq &>/dev/null; then
-  echo "[review] jq not available — skipping review comment handling" >&2
+  echo "[review] jq not available — required for comment processing" >&2
   exit 1
 fi
 
@@ -191,7 +191,8 @@ INSTRUCTIONS:
 ---
 *AI-assisted response via Claude Code*
 - Before posting any reply, run: python3 ${check_replied} ${OWNER} ${REPO} ${PR_NUMBER} <comment_id> --type <type>
-  Exit 1 or 2 = do NOT post.
+  Exit 1 = do NOT post (already replied).
+  Exit 2 = error; proceed with caution (may post if no duplicate is visible).
 - If unsure about the requested change, explain your uncertainty instead of guessing.
 ${commit_limit_note}
 THREAD CONTEXT (${thread_type}):

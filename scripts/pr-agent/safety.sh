@@ -57,7 +57,7 @@ check_blocklist() {
 # ---------------------------------------------------------------------------
 # audit_log — append a structured JSONL entry
 #   $1: action  (auto-fix, blocked, skipped, reverted, dry-run, error, info)
-#   $2: category (trivial-format, trivial-generated-files, etc.)
+#   $2: category (e.g. review-code-change, review-explanation)
 #   $3: files   (space-separated list)
 #   $4: commit  (SHA or empty)
 #   $5: outcome (human-readable description)
@@ -109,7 +109,7 @@ increment_commit_count() {
 # ---------------------------------------------------------------------------
 # gh_retry — retry a command with exponential backoff
 #   All arguments are passed through as the command to execute.
-#   Retries 3 times at 5s / 15s / 45s intervals.
+#   Retries 3 times with 5s / 15s backoff.
 # ---------------------------------------------------------------------------
 gh_retry() {
   local retries=3 delay=5
