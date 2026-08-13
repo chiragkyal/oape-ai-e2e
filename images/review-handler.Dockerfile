@@ -6,7 +6,6 @@ RUN dnf install -y \
         git \
         make \
         jq \
-        curl \
         openssl \
         python3 && \
     dnf install -y 'dnf-command(config-manager)' && \
