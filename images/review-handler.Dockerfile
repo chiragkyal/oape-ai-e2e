@@ -16,7 +16,7 @@ RUN dnf install -y \
 RUN dnf module reset -y nodejs && \
     dnf module enable -y nodejs:20 && \
     dnf install -y nodejs npm && \
-    npm install -g @anthropic-ai/claude-code@1.0.16 && \
+    npm install -g @anthropic-ai/claude-code && \
     dnf clean all
 
 RUN go install golang.org/x/tools/cmd/goimports@v0.33.0 && \
