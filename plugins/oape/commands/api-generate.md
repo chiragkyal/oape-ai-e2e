@@ -458,6 +458,32 @@ Generate or modify Go type definitions based on the enhancement proposal. This m
 types, new fields, modifications to existing fields, enum types, discriminated unions, or type
 registration.
 
+#### Pre-generation traceability check
+
+Before writing any code, list every field/type being added, modified, or removed. For each one,
+cite the specific sentence or section in the input sources that requires it. If a change cannot
+be traced to a specific requirement, do NOT make it.
+
+#### File scope guard
+
+Only create or modify files under `api/` or type-definition directories (e.g., `features/`).
+If you are about to write a file under `controllers/`, `pkg/controller/`, `internal/controller/`,
+`pkg/operator/`, `cmd/`, or `bindata/`, STOP — that belongs in `api-implement`, not here.
+
+**Hard deny-list — NEVER create or modify files matching ANY of these patterns:**
+- `controllers/**` or `pkg/controller/**` or `internal/controller/**` (controller logic)
+- `pkg/operator/**` (operator logic)
+- `cmd/**` or `main.go` (entrypoints and scheme registration)
+- `bindata/**` (static resource manifests)
+- `**/constant.go` or `**/constants.go` outside `api/` (controller constants)
+- `**/networkpolicies.go`, `**/federation.go`, `**/template.go` (implementation files)
+
+Even if new API fields imply controller behavior (e.g., new fields need env vars, new types need
+resource builders), do NOT generate those files. Only generate the types and note the implied
+controller work in the summary under "Deferred to api-implement".
+
+#### Generation rules
+
 For every marker, tag, or convention applied: derive it from the fetched convention documents
 (Phase 1) or the existing code (Phase 4). Conventions take precedence when both differ. Existing
 patterns not covered by conventions (e.g., mechanical code-gen markers) should be replicated for
@@ -552,6 +578,10 @@ When failing, provide a clear error message explaining:
 5. **Idempotent**: Running this command multiple times with the same inputs should produce the same result (though it should warn if files already exist).
 6. **Minimal changes**: Only generate what the input sources specify. Do not add extra fields, types, or features not described.
 7. **Surgical edits**: When modifying existing files, only change what the input sources require. Preserve all unrelated code, comments, and formatting. For modifications to existing fields, clearly document what changed and why in the output summary.
+8. **API types only — no controller code**: This command MUST only create or modify files in API-layer directories (`api/`, `features/`, type definition files). Do NOT create or modify files in controller directories (`controllers/`, `pkg/controller/`, `internal/controller/`, `pkg/operator/`, `cmd/`, `bindata/`). If the EP describes controller behavior, note it in the summary under "Deferred to api-implement" but generate zero controller code.
+9. **No invented fields**: Do NOT add fields, types, or enum values that the input sources do not explicitly specify. If the EP adds field X, only add field X — do not also add a related field Y you think "should" exist.
+10. **No restructuring**: Do NOT rename existing fields, change pointer-vs-value semantics on existing fields, or move fields between structs unless the input sources explicitly require it. When the EP says "remove field X", only remove field X. Do NOT modernize, reformat, or "improve" existing comments, type names, or field ordering on untouched fields.
+11. **No controller-layer files**: Do NOT create files under `controllers/`, `pkg/controller/`, `bindata/`, `cmd/`, or `pkg/operator/`. This includes constants files, helper files, and resource builders that serve controller logic. If new API fields imply controller wiring, list the implied work in the summary — do not generate it.
 
 ## Arguments
 

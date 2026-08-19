@@ -1,0 +1,12 @@
+{
+    "claude_allowed_tools": [
+        "Bash(*)",
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+        "Grep",
+        "WebFetch",
+        "Task"
+    ]
+}

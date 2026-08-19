@@ -628,6 +628,27 @@ find "$REPO_ROOT" -type f -name 'starter.go' -not -path '*/vendor/*' | head -5
 
 ### Phase 5: Read Existing Controller Code for Context
 
+#### 5.1 Find existing controller for the target resource
+
+```bash
+# Search for an existing controller that already reconciles the target resource type.
+# Check Reconcile/Sync methods, SetupWithManager, and For() calls for the target Kind.
+grep -r "For(&.*<TargetKind>{}\|<TargetResources>()\|Reconcile.*<TargetKind>" "$REPO_ROOT" --include='*.go' -l | grep -v vendor | grep -v _output | head -10
+```
+
+```thinking
+CRITICAL: If an existing controller already reconciles this resource type, I MUST modify it
+rather than create a new controller file. I will:
+1. Read ALL files in the existing controller's package (controller.go, constants.go, helpers, resource builders)
+2. Add new logic into the existing Reconcile/Sync flow
+3. Add constants to existing constant files, not new ones
+4. Add resource builders to existing builder files, not new ones
+
+I only create a NEW controller file when NO existing controller handles this resource type.
+```
+
+#### 5.2 Read existing controller patterns
+
 ```bash
 # Find sample controller based on OPERATOR_TYPE
 if [ "$OPERATOR_TYPE" = "library-go" ]; then
@@ -656,8 +677,16 @@ I MUST read existing controller(s) and extract these EXACT patterns to replicate
 10. **Resource creation** - How dependent resources are created
 11. **Error handling** - How errors are wrapped and returned
 12. **Constants** - Where constants are defined (same file, separate file)
+13. **Resource builder files** - Are there template.go / builder files that construct Jobs, Deployments, etc.? Read ALL files in the controller package, not just the main controller file.
+14. **Function signatures** - Do builder functions accept individual params or whole spec structs? Match their style when adding new parameters.
 
 I will replicate these patterns EXACTLY in generated code.
+
+**CRITICAL pre-generation checklist:**
+- For each new spec field, find the existing file where its parent resource is built/used. Modify THAT file — do not create a new file.
+- If constants already exist in a constants file, add new constants there.
+- If the controller already has a builder function for the resource type (e.g., getJobTemplate, buildDeployment), add parameters to that function.
+- Only create new files for genuinely new resource types or controllers that have no existing equivalent.
 ```
 
 ---
@@ -1387,6 +1416,11 @@ The command MUST FAIL and STOP immediately if ANY of the following are true:
 9. **Status-first**: Always use Status().Update() for status changes
 10. **Finalizer safety**: Add before external resources, remove after cleanup
 11. **Event recording**: Record events for user-visible state changes
+12. **Integrate, don't duplicate**: Most EPs add functionality to EXISTING controllers. Before creating any new controller file, search for an existing controller that already reconciles the same resource type. If one exists, modify it to add the new behavior — add logic to existing Reconcile/Sync methods, add helpers to existing resource-builder files, add constants to existing constant files. Only create a NEW controller when no existing controller handles the target resource type, or the EP explicitly specifies a new controller.
+13. **No invented logic**: Do NOT add controller behavior (constants, helper files, resource builders) that the input sources do not describe. If the EP only adds API fields, only wire those fields into the existing reconciliation — do not create standalone feature files.
+14. **Wire new fields into existing flows**: When the EP adds fields to an existing type, find the existing code that builds or uses that type (e.g., Job templates, Deployment specs, container env vars) and wire the new fields there. Do not create a separate file per new field — add the logic inline where the resource is already being constructed.
+15. **Update scheme and imports**: When new API types are introduced (e.g., `routev1`, `networkingv1`), update `cmd/*/main.go` or equivalent entrypoints to register the new scheme and add the import. Also update any `pkg/client/` setup files that initialize shared schemes.
+16. **Update existing resource builders**: If the repo has template/builder files that construct Jobs, Deployments, or other resources, modify those files to pass through new spec fields (e.g., add parameters to existing builder functions, add env vars to existing container specs). Do not create parallel builder files.
 
 ## Arguments
 

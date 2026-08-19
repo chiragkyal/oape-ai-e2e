@@ -14,7 +14,7 @@ fi
 # Configuration (overridable via environment)
 # ---------------------------------------------------------------------------
 MAX_COMMITS_PER_RUN="${MAX_COMMITS_PER_RUN:-10}"
-MAX_COMMITS_PER_PR="${MAX_COMMITS_PER_PR:-3}"
+MAX_COMMITS_PER_PR="${MAX_COMMITS_PER_PR:-5}"
 MAX_DIFF_LINES="${MAX_DIFF_LINES:-500}"
 COMMIT_COUNTER_FILE="${RUNNER_TEMP:-/tmp}/pr-agent-commit-count.txt"
 AUDIT_LOG="${RUNNER_TEMP:-/tmp}/pr-agent-audit-${GITHUB_RUN_ID:-${BUILD_ID:-local}}.jsonl"
@@ -26,7 +26,6 @@ AUDIT_LOG="${RUNNER_TEMP:-/tmp}/pr-agent-audit-${GITHUB_RUN_ID:-${BUILD_ID:-loca
 # and dependency lock files. Go source files that operate on Kubernetes
 # Secret/Token resources are NOT blocked — only files that store secrets.
 
-# Default patterns (go.mod and go.sum blocked)
 BLOCKED_PATTERNS='\.(key|pem|crt|cert|p12|pfx)$'
 BLOCKED_PATTERNS+='|\.env$'
 BLOCKED_PATTERNS+='|credentials\.'
@@ -75,7 +74,7 @@ check_blocklist() {
 # ---------------------------------------------------------------------------
 # audit_log — append a structured JSONL entry
 #   $1: action  (auto-fix, blocked, skipped, reverted, dry-run, error, info)
-#   $2: category (trivial-format, trivial-generated-files, etc.)
+#   $2: category (trivial-format, trivial-generated-files, review-code-change, etc.)
 #   $3: files   (space-separated list)
 #   $4: commit  (SHA or empty)
 #   $5: outcome (human-readable description)

@@ -35,7 +35,7 @@ COPY plugins /plugins
 RUN git config --global user.name "openshift-app-platform-shift-bot" && \
     git config --global user.email "267347085+openshift-app-platform-shift-bot@users.noreply.github.com"
 
-RUN chmod -R g=u /opt/app-root/src
+RUN chmod -R g=u /opt/app-root/src /config
 
 USER 1001
 
