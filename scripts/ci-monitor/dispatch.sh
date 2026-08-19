@@ -17,6 +17,7 @@
 #   RETEST_INFRA_FLAKES    — If "true", post /test for infra flakes (default: "false")
 #   MAX_RETESTS_PER_RUN    — Max retest comments per run (default: 2)
 #   WORK_DIR               — Working directory with CI logs (default: /tmp/ci-monitor)
+#   REVIEW_HANDLER_ENABLED — If "true", run review-handler when CI is green (default: "false")
 
 set -euo pipefail
 
@@ -27,7 +28,11 @@ PHASE="${PHASE:-2}"
 RETEST_INFRA_FLAKES="${RETEST_INFRA_FLAKES:-false}"
 MAX_RETESTS_PER_RUN="${MAX_RETESTS_PER_RUN:-2}"
 WORK_DIR="${WORK_DIR:-/tmp/ci-monitor}"
+REVIEW_HANDLER_ENABLED="${REVIEW_HANDLER_ENABLED:-false}"
 REPORT_MARKER="<!-- oape-ci-monitor -->"
+# Delimiter for the appended "Actions Taken" block so it can be replaced (not
+# accumulated) on each periodic run.
+ACTIONS_MARKER="<!-- oape-actions-taken -->"
 
 # ---------------------------------------------------------------------------
 # Prechecks
@@ -63,10 +68,28 @@ echo "  Retest Infra Flakes: ${RETEST_INFRA_FLAKES}"
 echo "============================================"
 
 # ---------------------------------------------------------------------------
-# If all passed, nothing to dispatch
+# If all passed — Phase 3: Review Handler (when enabled)
 # ---------------------------------------------------------------------------
 if [[ "$OVERALL_STATUS" == "passed" ]]; then
-  echo "[dispatch] All CI checks passed — no further action needed"
+  if [[ "$REVIEW_HANDLER_ENABLED" == "true" ]]; then
+    echo "[dispatch] All CI checks passed — invoking review handler (Phase 3)"
+    review_handler="${OAPE_ROOT}/scripts/pr-agent/review-handler.sh"
+    if [[ ! -x "$review_handler" ]]; then
+      echo "[dispatch] ERROR: review-handler.sh not found at ${review_handler}" >&2
+      exit 1
+    fi
+
+    review_args=(--pr-url "$PR_URL")
+    if [[ "$DRY_RUN" == "true" ]]; then
+      review_args+=(--dry-run)
+    fi
+
+    "$review_handler" "${review_args[@]}" || {
+      echo "[dispatch] WARN: review-handler exited with $? (non-fatal)"
+    }
+  else
+    echo "[dispatch] All CI checks passed — review handler disabled (set REVIEW_HANDLER_ENABLED=true to enable)"
+  fi
   exit 0
 fi
 
@@ -251,16 +274,26 @@ if [[ -s "$ACTIONS_TAKEN_FILE" && "$DRY_RUN" != "true" ]]; then
     existing_body=$(gh api "repos/${OWNER}/${REPO}/issues/comments/${existing_comment_id}" \
       --jq '.body' 2>/dev/null || true)
 
-    actions_section=$'\n---\n### Actions Taken by oape-ci-monitor\n'
-    while IFS= read -r line; do
-      actions_section+="- ${line}"$'\n'
-    done < "$ACTIONS_TAKEN_FILE"
-    actions_section+=$'\n*Updated on '"$(date -u +'%Y-%m-%d %H:%M UTC')"'*'
+    if [[ -z "$existing_body" ]]; then
+      # A transient fetch failure would leave existing_body empty; PATCHing then would
+      # overwrite the CI monitor comment with only the Actions-Taken section, wiping the
+      # previously posted CI status report. Skip the update instead.
+      echo "[dispatch] WARN: Could not fetch existing report body — skipping actions update to avoid clobbering the CI report"
+    else
+      # Drop any prior actions block so the section is replaced, not accumulated.
+      existing_body="${existing_body%%"${ACTIONS_MARKER}"*}"
 
-    updated_body="${existing_body}${actions_section}"
-    gh api "repos/${OWNER}/${REPO}/issues/comments/${existing_comment_id}" \
-      -X PATCH -f body="$updated_body" > /dev/null 2>&1 || true
-    echo "[dispatch] Report updated with actions taken"
+      actions_section=$'\n'"${ACTIONS_MARKER}"$'\n---\n### Actions Taken by oape-ci-monitor\n'
+      while IFS= read -r line; do
+        actions_section+="- ${line}"$'\n'
+      done < "$ACTIONS_TAKEN_FILE"
+      actions_section+=$'\n*Updated on '"$(date -u +'%Y-%m-%d %H:%M UTC')"'*'
+
+      updated_body="${existing_body}${actions_section}"
+      gh api "repos/${OWNER}/${REPO}/issues/comments/${existing_comment_id}" \
+        -X PATCH -f body="$updated_body" > /dev/null 2>&1 || true
+      echo "[dispatch] Report updated with actions taken"
+    fi
   else
     echo "[dispatch] WARN: Could not find CI monitor comment to update"
   fi

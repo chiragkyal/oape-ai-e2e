@@ -25,6 +25,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=scripts/pr-agent/safety.sh
 source "${SCRIPT_DIR}/safety.sh"
+# shellcheck source=scripts/pr-agent/classify.sh
+source "${SCRIPT_DIR}/classify.sh"
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -144,56 +146,33 @@ fi
 
 git config user.name "$BOT_USER"
 git config user.email "267347085+${BOT_USER}@users.noreply.github.com"
-git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${OWNER}/${REPO}.git"
 
 base_branch=$(gh pr view "$PR_NUMBER" --repo "${OWNER}/${REPO}" --json baseRefName -q .baseRefName 2>/dev/null || echo "main")
+
+# Determine the push remote. Fork-based PRs (the common OpenShift workflow) must
+# push to the fork (head repo), not the base repo, or the fix never lands on the PR.
+head_repo=$(gh pr view "$PR_NUMBER" --repo "${OWNER}/${REPO}" --json headRepository,headRepositoryOwner \
+  -q '"\(.headRepositoryOwner.login)/\(.headRepository.name)"' 2>/dev/null || echo "${OWNER}/${REPO}")
+# The PR's actual head branch name on the remote. `git branch --show-current` is not a
+# reliable substitute: `gh pr checkout` may name the LOCAL branch differently (e.g. on a
+# name collision), which would make the fetch/rebase below resolve a missing remote ref.
+HEAD_REF=$(gh pr view "$PR_NUMBER" --repo "${OWNER}/${REPO}" --json headRefName -q .headRefName 2>/dev/null || echo "")
+if [[ "$head_repo" != "${OWNER}/${REPO}" ]]; then
+  git remote add fork "https://x-access-token:${GH_TOKEN}@github.com/${head_repo}.git" 2>/dev/null || \
+    git remote set-url fork "https://x-access-token:${GH_TOKEN}@github.com/${head_repo}.git"
+  PUSH_REMOTE="fork"
+else
+  git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${OWNER}/${REPO}.git"
+  PUSH_REMOTE="origin"
+fi
+
 git fetch origin "${base_branch}" --depth=1 2>/dev/null || true
 
-echo "[auto-fix] On branch: $(git branch --show-current), base: ${base_branch}"
+echo "[auto-fix] On branch: $(git branch --show-current), base: ${base_branch}, push remote: ${PUSH_REMOTE}"
 
 # --- Fine-grained classification from log files ---
-# When dispatch.sh sends the coarse "lint-failure" category, refine it
-# by reading the actual CI log files.
-refine_lint_category() {
-  local log_dir="$1"
-  local job="$2"
-
-  if [[ -z "$log_dir" || ! -d "$log_dir" ]]; then
-    echo "trivial-format"
-    return
-  fi
-
-  local log_id
-  log_id=$(echo "$job" | tr '/ ' '__')
-  local log_file="${log_dir}/log-${log_id}.txt"
-
-  if [[ ! -s "$log_file" ]]; then
-    for f in "${log_dir}"/log-*.txt; do
-      [[ -s "$f" ]] && log_file="$f" && break
-    done
-  fi
-
-  if [[ ! -s "$log_file" ]]; then
-    echo "trivial-format"
-    return
-  fi
-
-  local content
-  content=$(cat "$log_file")
-
-  if echo "$content" | grep -qiE 'generated code is out of date|make generate|make manifests|deepcopy-gen|zz_generated|boilerplate'; then
-    echo "trivial-generated-files"
-  elif echo "$content" | grep -qiE 'imported and not used|could not import|import ordering'; then
-    echo "trivial-import"
-  elif echo "$content" | grep -qiE 'golangci-lint|golint|staticcheck|revive'; then
-    echo "trivial-lint"
-  elif echo "$content" | grep -qiE 'gofmt|goimports|formatting differs|diff.*\.go'; then
-    echo "trivial-format"
-  else
-    echo "trivial-format"
-  fi
-}
-
+# When dispatch.sh sends the coarse "lint-failure" category, refine_lint_category
+# (provided by classify.sh) reads the actual CI log files to pick a sub-type.
 EFFECTIVE_CATEGORY="$CATEGORY"
 if [[ "$CATEGORY" == "lint-failure" ]]; then
   EFFECTIVE_CATEGORY=$(refine_lint_category "$LOG_DIR" "$JOB_NAME")
@@ -328,7 +307,16 @@ git commit -m "fix: ${EFFECTIVE_CATEGORY} — auto-fix by oape-ci-monitor"
 
 sha=$(git rev-parse HEAD)
 
-if ! git pull --rebase origin HEAD 2>/dev/null; then
+# Rebase onto the latest PR head (not the remote's default branch) to catch
+# concurrent pushes before we push our fix. `origin HEAD` would resolve to the
+# remote's default branch, pulling in unrelated commits.
+push_remote="${PUSH_REMOTE:-origin}"
+# Use the PR's real head branch name (falling back to the local branch) so the fetch,
+# rebase, and push all target the correct remote ref even when the local branch was
+# renamed by gh pr checkout.
+remote_branch="${HEAD_REF:-$(git branch --show-current)}"
+git fetch "$push_remote" "$remote_branch" 2>/dev/null || true
+if ! git rebase "${push_remote}/${remote_branch}" 2>/dev/null; then
   echo "[auto-fix] Rebase conflict — concurrent push detected, aborting" >&2
   git rebase --abort 2>/dev/null || true
   git reset --hard HEAD~1 2>/dev/null || true
@@ -336,7 +324,7 @@ if ! git pull --rebase origin HEAD 2>/dev/null; then
   exit 1
 fi
 
-git push origin HEAD
+git push "$push_remote" "HEAD:${remote_branch}"
 increment_commit_count > /dev/null
 
 audit_log "auto-fix" "$EFFECTIVE_CATEGORY" "$modified_files" "$sha" "success"

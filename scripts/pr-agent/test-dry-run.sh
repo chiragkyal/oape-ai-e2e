@@ -52,6 +52,7 @@ SCRIPTS=(
   "${REPO_ROOT}/scripts/pr-agent/safety.sh"
   "${REPO_ROOT}/scripts/pr-agent/auto-fix.sh"
   "${REPO_ROOT}/scripts/pr-agent/log-analyzer.sh"
+  "${REPO_ROOT}/scripts/pr-agent/review-handler.sh"
   "${REPO_ROOT}/scripts/ci-monitor/monitor.sh"
   "${REPO_ROOT}/scripts/ci-monitor/dispatch.sh"
 )
@@ -194,6 +195,31 @@ else
   fi
 
   rm -rf "$LOG_TEST_DIR" "$EMPTY_LOG_DIR"
+
+  echo ""
+
+  # =========================================================================
+  # Phase 2d: review-handler.sh dry-run validation
+  # =========================================================================
+  echo "=== Phase 2d: review-handler.sh dry-run test ==="
+
+  echo "  Testing review-handler.sh --dry-run (expects graceful exit)"
+  review_output=""
+  if review_output=$("${REPO_ROOT}/scripts/pr-agent/review-handler.sh" \
+      --pr-url "$TEST_PR_URL" --dry-run 2>&1); then
+    if echo "$review_output" | grep -q "DRY RUN\|No actionable\|no unresolved\|python3 not available\|Processing"; then
+      _pass "review-handler.sh --dry-run (graceful exit)"
+    else
+      _pass "review-handler.sh --dry-run (exited 0)"
+    fi
+  else
+    rc=$?
+    if echo "$review_output" | grep -q "python3 not available\|claude.*not found\|No actionable"; then
+      _skip "review-handler.sh --dry-run (missing dependency: python3 or claude)"
+    else
+      _fail "review-handler.sh --dry-run (exit code ${rc})"
+    fi
+  fi
 
   echo ""
 

@@ -118,24 +118,6 @@ The commands automatically detect which framework the repository uses:
 
 ---
 
-## Project Structure
-
-```
-scripts/ci-monitor/       CI monitoring pipeline (monitor.sh, dispatch.sh)
-scripts/pr-agent/         PR lifecycle agent (entrypoint, auto-fix, safety, test-dry-run)
-plugins/oape/commands/    Claude Code command definitions (/oape:* commands)
-plugins/oape/skills/      Claude Code skill definitions (injected into agent prompts)
-config/                   Tool configuration (config.json)
-images/                   Container image Dockerfiles (ci-monitor, agent-worker, go-server, gh-token-minter)
-docs/                     Architecture docs, Prow config templates
-deploy/                   Kubernetes deployment manifests
-go-server/                Go HTTP server for agent job execution
-agent/                    Python agent wrapper
-gh-token-minter/          GitHub App token generation utility
-```
-
----
-
 ## Prerequisites
 
 Before running commands, ensure:

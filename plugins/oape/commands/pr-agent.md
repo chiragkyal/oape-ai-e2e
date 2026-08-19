@@ -1,6 +1,6 @@
 ---
-description: Monitor CI status on a PR, classify failures, and generate a structured status report (Phase 1 report-only)
-argument-hint: <PR-URL> [--dry-run] [--monitor-only]
+description: "Run the PR Lifecycle Agent: monitor CI, auto-fix failures, and address review comments"
+argument-hint: <PR-URL> [--dry-run] [--monitor-only] [--review]
 ---
 
 ## Name
@@ -8,20 +8,28 @@ oape:pr-agent
 
 ## Synopsis
 ```shell
-/oape:pr-agent <PR-URL> [--dry-run] [--monitor-only]
+/oape:pr-agent <PR-URL> [--dry-run] [--monitor-only] [--review]
 ```
 
 ## Description
 
-The `oape:pr-agent` command runs the PR Lifecycle Agent against a single pull request. It fetches CI check status, collects failure logs from Prow GCS and GitHub Actions, classifies failures deterministically (regex-based), and generates a structured Markdown status report.
+The `oape:pr-agent` command runs the PR Lifecycle Agent against a single pull request. It orchestrates a multi-phase pipeline:
 
-**Phase 1 behaviour:** report-only. The agent posts a PR comment summarising CI results but does not apply auto-fixes or respond to review comments.
+| Phase | Script | What it does |
+|-------|--------|--------------|
+| 1 | `monitor.sh` | Poll CI checks, collect logs from Prow GCS, classify failures deterministically |
+| 2 | `dispatch.sh` | Route failures to auto-fix, retest, or Claude-powered analysis |
+| 3 | `review-handler.sh` | When CI is green, address pending review comments via Claude |
+| 4 | (entrypoint) | Generate and post structured status report |
+
+Phase 3 only runs when `--review` is passed and all CI checks are green.
 
 ## Arguments
 
 - `$1` (`PR-URL`): Full GitHub PR URL, e.g. `https://github.com/openshift/cert-manager-operator/pull/123`. **Required.**
-- `--dry-run`: Run the full analysis pipeline without posting any PR comments or making mutations.
-- `--monitor-only`: Skip auto-fix even if failures are detected (default Phase 1 behaviour).
+- `--dry-run`: Run the full analysis pipeline without posting PR comments or pushing commits.
+- `--monitor-only`: Skip auto-fix and review handling (report-only mode).
+- `--review`: Enable Phase 3 review handler (address pending review comments when CI passes).
 
 ## Implementation
 
@@ -32,12 +40,14 @@ Parse the user's input. The first positional argument is the PR URL. Remaining a
 ```bash
 PR_URL="$1"
 DRY_RUN_FLAG=""
-MONITOR_FLAG="--monitor-only"
+MONITOR_FLAG=""
+REVIEW_FLAG=""
 
 for arg in "${@:2}"; do
   case "$arg" in
     --dry-run)       DRY_RUN_FLAG="--dry-run" ;;
     --monitor-only)  MONITOR_FLAG="--monitor-only" ;;
+    --review)        REVIEW_FLAG="--review" ;;
   esac
 done
 ```
@@ -78,7 +88,8 @@ export GH_TOKEN="${GH_TOKEN:-$(gh auth token 2>/dev/null || echo '')}"
   --mode on-demand \
   --pr-url "$PR_URL" \
   $MONITOR_FLAG \
-  $DRY_RUN_FLAG
+  $DRY_RUN_FLAG \
+  $REVIEW_FLAG
 ```
 
 ### Step 4: Display Results
@@ -124,22 +135,27 @@ Ask the user if they want to schedule a periodic re-check:
 If the user accepts, create a one-shot cron job:
 ```
 CronCreate(cron: "<minute+10> <hour> <dom> <month> *", recurring: false,
-  prompt: "/oape:pr-agent <PR-URL> --monitor-only")
+  prompt: "/oape:pr-agent <PR-URL> --review")
 ```
 
 ## Examples
 
-1. **Monitor a PR (default report-only mode)**:
+1. **Full pipeline (monitor + auto-fix + review handler)**:
    ```shell
-   /oape:pr-agent https://github.com/openshift/cert-manager-operator/pull/456
+   /oape:pr-agent https://github.com/openshift/cert-manager-operator/pull/456 --review
    ```
 
-2. **Dry-run analysis (no PR comment posted)**:
+2. **Monitor-only (report without fixes or review handling)**:
    ```shell
-   /oape:pr-agent https://github.com/openshift/cert-manager-operator/pull/456 --dry-run
+   /oape:pr-agent https://github.com/openshift/cert-manager-operator/pull/456 --monitor-only
    ```
 
-3. **Explicit monitor-only mode**:
+3. **Dry-run analysis (no mutations)**:
    ```shell
-   /oape:pr-agent https://github.com/openshift/must-gather-operator/pull/123 --monitor-only
+   /oape:pr-agent https://github.com/openshift/cert-manager-operator/pull/456 --dry-run --review
+   ```
+
+4. **Default (monitor + auto-fix, no review handler)**:
+   ```shell
+   /oape:pr-agent https://github.com/openshift/must-gather-operator/pull/123
    ```

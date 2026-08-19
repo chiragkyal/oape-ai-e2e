@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # entrypoint.sh — Main orchestration script for the OAPE PR Lifecycle Agent.
 #
-# Phase 1 MVP: periodic mode only, deterministic classification,
-# auto-fix for trivial-format and trivial-generated-files.
+# Phases:
+#   1. CI monitoring (poll checks, classify failures, post report)
+#   2. Failure dispatch (auto-fix, retest, Claude analysis)
+#   3. Review handler (address review comments when CI is green)
+#   4. Status report
 #
 # Usage:
-#   scripts/pr-agent/entrypoint.sh --mode periodic [--dry-run]
-#   scripts/pr-agent/entrypoint.sh --mode on-demand --pr-url <URL> [--dry-run]
+#   scripts/pr-agent/entrypoint.sh --mode periodic [--dry-run] [--review]
+#   scripts/pr-agent/entrypoint.sh --mode on-demand --pr-url <URL> [--dry-run] [--review]
 
 set -euo pipefail
 
@@ -25,6 +28,7 @@ RATE_LIMIT_SECONDS="${RATE_LIMIT_SECONDS:-60}"
 PR_TIMEOUT_SECONDS="${PR_TIMEOUT_SECONDS:-720}"
 DRY_RUN="${DRY_RUN:-false}"
 MONITOR_ONLY="${MONITOR_ONLY:-false}"
+REVIEW_HANDLER_ENABLED="${REVIEW_HANDLER_ENABLED:-false}"
 BOT_USER="${BOT_USER:-openshift-app-platform-shift-bot}"
 GCSWEB_BASE_URL="${GCSWEB_BASE_URL:-https://gcsweb-ci.apps.ci.l2s4.p1.openshiftapps.com}"
 TEAM_REPOS_CSV="${REPO_ROOT}/deploy/config/team-repos.csv"
@@ -84,6 +88,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --monitor-only)
       MONITOR_ONLY="true"
+      shift
+      ;;
+    --review)
+      REVIEW_HANDLER_ENABLED="true"
       shift
       ;;
     *)
@@ -256,6 +264,68 @@ aggregate_ci_status() {
   elif [[ "$pending" -eq "$total" ]]; then echo "all-pending"
   elif [[ "$pending" -gt 0 ]]; then echo "mixed-pending"
   else echo "all-passed"
+  fi
+}
+
+# Evaluate only the REQUIRED status checks (per the base branch's protection rules)
+# so the review handler waits for required checks to pass without being blocked by
+# optional/flaky checks that may stay pending.
+# Output: no-checks | required-failed | required-pending | required-passed
+# Falls back to requiring ALL reported checks to pass when required-check metadata
+# is unavailable (no branch protection or insufficient permission).
+required_ci_status() {
+  local owner="$1" repo="$2" pr_number="$3"
+  local status_file="${RUNNER_TEMP}/ci-status-${owner}-${repo}-${pr_number}.json"
+
+  local total
+  total=$(jq 'length' "$status_file")
+  if [[ "$total" -eq 0 ]]; then echo "no-checks"; return; fi
+
+  # Fetch the required status-check contexts from the base branch's protection rules.
+  local base_branch required_file
+  base_branch=$(gh_retry gh pr view "$pr_number" --repo "${owner}/${repo}" \
+    --json baseRefName -q .baseRefName 2>/dev/null || echo "")
+  required_file="${RUNNER_TEMP}/required-checks-${owner}-${repo}-${pr_number}.json"
+  if [[ -z "$base_branch" ]] || ! gh_retry gh api \
+      "repos/${owner}/${repo}/branches/${base_branch}/protection/required_status_checks" \
+      --jq '[.contexts[]?, (.checks[]?.context)] | unique' > "$required_file" 2>/dev/null; then
+    echo "[]" > "$required_file"
+  fi
+
+  local required_count
+  required_count=$(jq 'length' "$required_file" 2>/dev/null || echo 0)
+
+  if [[ "$required_count" -eq 0 ]]; then
+    # No required-check info — fall back to requiring ALL checks to be green.
+    local failed pending
+    failed=$(jq '[.[] | select(.bucket == "fail")] | length' "$status_file")
+    pending=$(jq '[.[] | select(.bucket == "pending")] | length' "$status_file")
+    if [[ "$failed" -gt 0 ]]; then echo "required-failed"
+    elif [[ "$pending" -gt 0 ]]; then echo "required-pending"
+    else echo "required-passed"
+    fi
+    return
+  fi
+
+  # Evaluate only the checks whose name matches a required context. gh's bucket is
+  # one of: pass | fail | pending | skipping | cancel. A skipped required check does
+  # not block merge (GitHub treats it as success), so count it as passed; a cancelled
+  # one is non-passing, so count it as failed. Anything left unclassified here would
+  # under-count `reported` below and pin the status at required-pending forever.
+  local req_failed req_pending req_passed
+  req_failed=$(jq --slurpfile req "$required_file" \
+    '[.[] | select(.name as $n | ($req[0] | index($n)) != null) | select(.bucket == "fail" or .bucket == "cancel")] | length' "$status_file")
+  req_pending=$(jq --slurpfile req "$required_file" \
+    '[.[] | select(.name as $n | ($req[0] | index($n)) != null) | select(.bucket == "pending")] | length' "$status_file")
+  req_passed=$(jq --slurpfile req "$required_file" \
+    '[.[] | select(.name as $n | ($req[0] | index($n)) != null) | select(.bucket == "pass" or .bucket == "skipping")] | length' "$status_file")
+
+  # A required context that has not reported any status yet counts as pending (this
+  # matches GitHub, which blocks merge until every required check reports).
+  local reported=$((req_failed + req_pending + req_passed))
+  if [[ "$req_failed" -gt 0 ]]; then echo "required-failed"
+  elif [[ "$req_pending" -gt 0 || "$reported" -lt "$required_count" ]]; then echo "required-pending"
+  else echo "required-passed"
   fi
 }
 
@@ -824,7 +894,36 @@ process_pr() {
     fi
   fi
 
-  # Phase 3: Status Report
+  # Phase 3: Review Handler (only when all REQUIRED CI checks are green and enabled).
+  # Skip the required-CI evaluation entirely when the handler cannot run — it makes two
+  # extra gh API calls (pr view + branch protection) whose result would be discarded.
+  if [[ "$REVIEW_HANDLER_ENABLED" == "true" && "$MONITOR_ONLY" != "true" ]]; then
+    local required_status
+    required_status=$(required_ci_status "$OWNER" "$REPO" "$PR_NUMBER")
+    echo "[PR #${PR_NUMBER}] Required CI status: ${required_status}"
+    if [[ "$required_status" == "required-passed" ]]; then
+      echo "[PR #${PR_NUMBER}] Phase: review handler — started"
+      local review_handler="${SCRIPT_DIR}/review-handler.sh"
+      if [[ -x "$review_handler" ]]; then
+        local review_args=(--pr-url "https://github.com/${OWNER}/${REPO}/pull/${PR_NUMBER}")
+        if [[ "$DRY_RUN" == "true" ]]; then
+          review_args+=(--dry-run)
+        fi
+        "$review_handler" "${review_args[@]}" || {
+          echo "[PR #${PR_NUMBER}] Phase: review handler — exited with $? (non-fatal)"
+        }
+      else
+        echo "[PR #${PR_NUMBER}] Phase: review handler — skipped (script not found)"
+      fi
+      echo "[PR #${PR_NUMBER}] Phase: review handler — completed"
+    else
+      echo "[PR #${PR_NUMBER}] Phase: review handler — skipped (waiting for required CI: ${required_status})"
+    fi
+  else
+    echo "[PR #${PR_NUMBER}] Phase: review handler — skipped (disabled or monitor-only)"
+  fi
+
+  # Phase 4: Status Report
   echo "[PR #${PR_NUMBER}] Phase: status report — started"
   generate_status_report "$OWNER" "$REPO" "$PR_NUMBER"
   post_status_comment "$OWNER" "$REPO" "$PR_NUMBER"
@@ -905,6 +1004,7 @@ run_periodic() {
     local -a flags=()
     [[ "$DRY_RUN" == "true" ]] && flags+=(--dry-run)
     [[ "$MONITOR_ONLY" == "true" ]] && flags+=(--monitor-only)
+    [[ "$REVIEW_HANDLER_ENABLED" == "true" ]] && flags+=(--review)
 
     # Invoke entrypoint.sh as a subprocess per PR, wrapped in timeout.
     # Each PR gets its own process for isolation — a crash or hang in one

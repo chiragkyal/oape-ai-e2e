@@ -7,10 +7,15 @@
 #
 # The job runs as an optional, always-run presubmit alongside other CI jobs.
 # It polls until all other checks reach a terminal state, then:
-#   1. Collects Prow build logs from GCS via gcsweb
-#   2. Classifies failures deterministically (regex-based, zero API cost)
-#   3. Queries Sippy for flake history
-#   4. Posts a structured analysis report as a PR comment
+#   Phase 1 (monitor.sh):
+#     1. Collects Prow build logs from GCS via gcsweb
+#     2. Classifies failures deterministically (regex-based, zero API cost)
+#     3. Queries Sippy for flake history
+#     4. Posts a structured analysis report as a PR comment
+#   Phase 2 (dispatch.sh):
+#     5. Routes failures to auto-fix, retest, or Claude-powered analysis
+#   Phase 3 (review-handler.sh, when REVIEW_HANDLER_ENABLED=true):
+#     6. If CI is green, addresses pending review comments via Claude
 #
 # Trigger manually: /test oape-ci-monitor
 #
@@ -34,23 +39,27 @@
 #   - dockerfile_literal: |-
 #       FROM registry.access.redhat.com/ubi9/go-toolset
 #       USER 0
-#       RUN dnf install -y git make jq && \
+#       RUN dnf install -y git make jq openssl python3 && \
 #           dnf install -y 'dnf-command(config-manager)' && \
 #           dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo && \
 #           dnf install -y gh && \
 #           dnf clean all
 #       WORKDIR /app
-#       RUN git clone --depth 1 -b OAPE-752 https://github.com/openshift-eng/oape-ai-e2e.git /tmp/oape && \
+#       RUN git clone --depth 1 -b main https://github.com/openshift-eng/oape-ai-e2e.git /tmp/oape && \
 #           cp -r /tmp/oape/scripts /app/scripts && \
 #           cp -r /tmp/oape/plugins /plugins && \
 #           mkdir -p /config && cp -r /tmp/oape/deploy/config/* /config/ && \
 #           rm -rf /tmp/oape
-#       RUN go install golang.org/x/tools/cmd/goimports@latest && \
-#           curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b /usr/local/bin
-#       RUN dnf install -y nodejs npm && dnf clean all
+#       RUN go install golang.org/x/tools/cmd/goimports@v0.33.0 && \
+#           curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/v2.1.6/install.sh | sh -s -- -b /usr/local/bin v2.1.6
+#       RUN dnf module reset -y nodejs && \
+#           dnf module enable -y nodejs:20 && \
+#           dnf install -y nodejs npm && \
+#           npm install -g @anthropic-ai/claude-code@1.0.16 && \
+#           dnf clean all
 #       RUN git config --global user.name "openshift-app-platform-shift-bot" && \
 #           git config --global user.email "267347085+openshift-app-platform-shift-bot@users.noreply.github.com"
-#       RUN chmod -R g=u /opt/app-root/src
+#       RUN chmod -R g=u /opt/app-root/src /config
 #       USER 1001
 #     to: ci-monitor-agent
 
@@ -158,6 +167,7 @@
         export SELF_JOB_NAME="oape-ci-monitor"
         export BUILD_ID="${BUILD_ID:-}"
         export OAPE_RUN_URL="${BUILD_LOG_URL:-}"
+        export REVIEW_HANDLER_ENABLED="${REVIEW_HANDLER_ENABLED:-false}"
 
         gh auth setup-git
         /app/scripts/ci-monitor/monitor.sh

@@ -24,6 +24,8 @@ OAPE_ROOT="${OAPE_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 
 # shellcheck source=scripts/pr-agent/safety.sh
 source "${SCRIPT_DIR}/safety.sh"
+# shellcheck source=scripts/pr-agent/classify.sh
+source "${SCRIPT_DIR}/classify.sh"
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -132,50 +134,7 @@ fi
 echo "[log-analyzer] Found ${#LOG_FILES[@]} log file(s)"
 
 # ---------------------------------------------------------------------------
-# Deterministic classification (same regex as auto-fix.sh)
-# ---------------------------------------------------------------------------
-classify_log() {
-  local log_file="$1"
-  local content
-  content=$(tail -n "$MAX_LOG_LINES" "$log_file")
-
-  # Mode A: Install failure
-  if echo "$content" | grep -qiE 'level=fatal.*installer|cluster creation failed|bootstrap.*timed out|waiting for bootstrapComplete|cluster-install.*fail'; then
-    echo "install-failure"
-    return
-  fi
-
-  # Mode E: Infrastructure / transient
-  if echo "$content" | grep -qiE 'ImagePullBackOff|i/o timeout|connection refused|etcdserver: request timed out|lease lost|quota exceeded|InsufficientInstanceCapacity|registry.*timeout|context deadline exceeded'; then
-    if ! echo "$content" | grep -qiE 'FAIL:.*Test|--- FAIL'; then
-      echo "infra-flake"
-      return
-    fi
-  fi
-
-  # Mode C: Build / compile failure
-  if echo "$content" | grep -qiE 'cannot find package|undefined:|syntax error.*\.go|imported and not used|make: \*\*\* .* Error'; then
-    echo "build-failure"
-    return
-  fi
-
-  # Mode D: Lint / static analysis
-  if echo "$content" | grep -qiE 'golangci-lint|golint|staticcheck|revive|gofmt|goimports|formatting differs|generated code is out of date|make generate|make manifests|deepcopy-gen|boilerplate'; then
-    echo "lint-failure"
-    return
-  fi
-
-  # Mode B: Test failure
-  if echo "$content" | grep -qiE 'FAIL:.*Test|--- FAIL|FAIL\s+\S+/|test.*failed'; then
-    echo "test-failure"
-    return
-  fi
-
-  echo "unknown"
-}
-
-# ---------------------------------------------------------------------------
-# Classify each log file
+# Classify each log file (classify_log is provided by classify.sh)
 # ---------------------------------------------------------------------------
 declare -A FILE_CLASSIFICATIONS=()
 UNKNOWN_FILES=()
