@@ -45,6 +45,11 @@ RESULT_FILE="${RESULT_FILE:-/tmp/ci-monitor-result.json}"
 WORK_DIR="${WORK_DIR:-/tmp/ci-monitor}"
 REPORT_MARKER="<!-- oape-ci-monitor -->"
 
+# GitHub App credentials (mounted by Prow; optional locally)
+GITHUB_APP_ID_FILE="${GITHUB_APP_ID_FILE:-/var/run/github-app/app-id}"
+GITHUB_APP_KEY_FILE="${GITHUB_APP_KEY_FILE:-/var/run/github-app/private-key.pem}"
+TOKEN_GENERATED_AT=0
+
 # Release repo context (populated by fetch_release_context)
 USE_RELEASE_CONTEXT="false"
 RELEASE_VERSION=""
@@ -53,6 +58,9 @@ RELEASE_VERSION=""
 OWNER=""
 REPO=""
 PR_NUMBER=""
+
+# Tracks the last non-zero total check count to detect transient API failures
+LAST_KNOWN_TOTAL=0
 
 # ---------------------------------------------------------------------------
 # Utility: retry with exponential backoff
@@ -71,6 +79,69 @@ gh_retry() {
   done
   echo "[retry] All ${retries} attempts failed for: $*" >&2
   return 1
+}
+
+# ---------------------------------------------------------------------------
+# GitHub App token refresh (handles 1-hour TTL during long polls)
+# ---------------------------------------------------------------------------
+refresh_github_token() {
+  if [[ ! -f "$GITHUB_APP_ID_FILE" || ! -f "$GITHUB_APP_KEY_FILE" ]]; then
+    echo "[auth-refresh] GitHub App credentials not available — cannot refresh" >&2
+    return 1
+  fi
+
+  local app_id pem_path header now exp payload signature jwt
+  app_id=$(cat "$GITHUB_APP_ID_FILE")
+  pem_path="$GITHUB_APP_KEY_FILE"
+
+  header=$(printf '{"alg":"RS256","typ":"JWT"}' | openssl base64 -e -A | tr '+/' '-_' | tr -d '=')
+  now=$(date +%s); exp=$((now + 300))
+  payload=$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' "$now" "$exp" "$app_id" | openssl base64 -e -A | tr '+/' '-_' | tr -d '=')
+  signature=$(printf '%s' "${header}.${payload}" | openssl dgst -sha256 -sign "$pem_path" -binary | openssl base64 -e -A | tr '+/' '-_' | tr -d '=')
+  jwt="${header}.${payload}.${signature}"
+
+  local install_response http_code install_body inst_id
+  install_response=$(curl -s -w "\n%{http_code}" \
+    -H "Authorization: Bearer ${jwt}" -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/repos/${OWNER}/${REPO}/installation")
+  http_code=$(echo "$install_response" | tail -1)
+  install_body=$(echo "$install_response" | sed '$d')
+
+  if [[ "$http_code" -ne 200 ]]; then
+    echo "[auth-refresh] App not installed on ${OWNER}/${REPO} (HTTP ${http_code})" >&2
+    return 1
+  fi
+
+  inst_id=$(echo "$install_body" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+
+  local token_response t_code t_body
+  token_response=$(curl -s -w "\n%{http_code}" -X POST \
+    -H "Authorization: Bearer ${jwt}" -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/app/installations/${inst_id}/access_tokens")
+  t_code=$(echo "$token_response" | tail -1)
+  t_body=$(echo "$token_response" | sed '$d')
+
+  if [[ "$t_code" -ne 201 ]]; then
+    echo "[auth-refresh] Token creation failed (HTTP ${t_code})" >&2
+    return 1
+  fi
+
+  export GH_TOKEN
+  GH_TOKEN=$(echo "$t_body" | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
+  TOKEN_GENERATED_AT=$(date +%s)
+  echo "[auth-refresh] Token refreshed successfully"
+}
+
+# Proactively refresh if the token is older than 50 minutes (3000s)
+maybe_refresh_token() {
+  if [[ "$TOKEN_GENERATED_AT" -eq 0 ]]; then
+    return 0
+  fi
+  local age=$(( $(date +%s) - TOKEN_GENERATED_AT ))
+  if [[ "$age" -ge 3000 ]]; then
+    echo "[auth-refresh] Token age ${age}s (>3000s) — refreshing proactively"
+    refresh_github_token || echo "[auth-refresh] WARN: proactive refresh failed, will retry on next API error"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -218,10 +289,21 @@ except Exception as e:
 fetch_ci_checks() {
   local output_file="${WORK_DIR}/ci-checks.json"
 
+  maybe_refresh_token
+
   if ! gh_retry gh pr checks "$PR_NUMBER" --repo "${OWNER}/${REPO}" \
     --json name,state,link,bucket \
     > "$output_file" 2>/dev/null; then
-    echo "[]" > "$output_file"
+    echo "[fetch] gh pr checks failed — attempting token refresh" >&2
+    if refresh_github_token 2>/dev/null; then
+      if ! gh_retry gh pr checks "$PR_NUMBER" --repo "${OWNER}/${REPO}" \
+        --json name,state,link,bucket \
+        > "$output_file" 2>/dev/null; then
+        echo "[]" > "$output_file"
+      fi
+    else
+      echo "[]" > "$output_file"
+    fi
   fi
 
   # Filter out self and non-CI contexts (merge gates, review bots, etc.)
@@ -234,6 +316,22 @@ fetch_ci_checks() {
     )]' \
     "$output_file")
   echo "$filtered" > "$output_file"
+
+  # Guard: if the result is empty but we previously had checks, this is
+  # likely a transient API failure (e.g. token expiry). Keep the last known
+  # good state to avoid false "all passed" conclusions.
+  local current_total
+  current_total=$(jq 'length' "$output_file")
+  if [[ "$current_total" -eq 0 && "$LAST_KNOWN_TOTAL" -gt 0 ]]; then
+    echo "[fetch] WARN: Got 0 checks but previously had ${LAST_KNOWN_TOTAL} — treating as transient failure" >&2
+    # Restore the previous checks file so the poll loop doesn't treat this as "complete"
+    if [[ -f "${WORK_DIR}/ci-checks-last-good.json" ]]; then
+      cp "${WORK_DIR}/ci-checks-last-good.json" "$output_file"
+    fi
+  elif [[ "$current_total" -gt 0 ]]; then
+    LAST_KNOWN_TOTAL="$current_total"
+    cp "$output_file" "${WORK_DIR}/ci-checks-last-good.json"
+  fi
 
   echo "$output_file"
 }
@@ -852,12 +950,25 @@ post_report_comment() {
     --jq ".[] | select(.body | contains(\"${REPORT_MARKER}\")) | .id" 2>/dev/null | head -1 || true)
 
   if [[ -n "$existing_comment_id" ]]; then
-    gh_retry gh api "repos/${OWNER}/${REPO}/issues/comments/${existing_comment_id}" \
-      -X PATCH -f body="$body" > /dev/null 2>&1
-    echo "[post] Updated existing CI monitor comment on ${OWNER}/${REPO}#${PR_NUMBER}"
+    if gh_retry gh api "repos/${OWNER}/${REPO}/issues/comments/${existing_comment_id}" \
+      -X PATCH -f body="$body" > /dev/null 2>&1; then
+      echo "[post] Updated existing CI monitor comment on ${OWNER}/${REPO}#${PR_NUMBER}"
+    else
+      echo "[post] WARN: Failed to update comment — attempting token refresh" >&2
+      if refresh_github_token 2>/dev/null; then
+        gh_retry gh api "repos/${OWNER}/${REPO}/issues/comments/${existing_comment_id}" \
+          -X PATCH -f body="$body" > /dev/null 2>&1 || echo "[post] WARN: Update still failed after refresh" >&2
+      fi
+    fi
   else
-    gh_retry gh pr comment "$PR_NUMBER" --repo "${OWNER}/${REPO}" --body "$body" > /dev/null 2>&1
-    echo "[post] Posted new CI monitor comment on ${OWNER}/${REPO}#${PR_NUMBER}"
+    if gh_retry gh pr comment "$PR_NUMBER" --repo "${OWNER}/${REPO}" --body "$body" > /dev/null 2>&1; then
+      echo "[post] Posted new CI monitor comment on ${OWNER}/${REPO}#${PR_NUMBER}"
+    else
+      echo "[post] WARN: Failed to post comment — attempting token refresh" >&2
+      if refresh_github_token 2>/dev/null; then
+        gh_retry gh pr comment "$PR_NUMBER" --repo "${OWNER}/${REPO}" --body "$body" > /dev/null 2>&1 || echo "[post] WARN: Post still failed after refresh" >&2
+      fi
+    fi
   fi
 }
 
@@ -1002,6 +1113,11 @@ main() {
   parse_pr_url "$PR_URL"
   echo "[main] Monitoring ${OWNER}/${REPO}#${PR_NUMBER}"
 
+  # Record when the initial token was created (set by the entrypoint)
+  if [[ -n "${GH_TOKEN:-}" && "$TOKEN_GENERATED_AT" -eq 0 ]]; then
+    TOKEN_GENERATED_AT=$(date +%s)
+  fi
+
   run_prechecks
 
   # Phase 0: Fetch release repo context
@@ -1028,7 +1144,10 @@ main() {
   local failed_count
   failed_count=$(jq '[.[] | select(.bucket == "fail")] | length' "$checks_file")
 
-  if [[ "$failed_count" -eq 0 ]]; then
+  local total_count
+  total_count=$(jq 'length' "$checks_file")
+
+  if [[ "$failed_count" -eq 0 && "$total_count" -gt 0 ]]; then
     echo ""
     echo "=== All CI checks passed — generating summary report ==="
     generate_report
@@ -1037,6 +1156,11 @@ main() {
     echo ""
     echo "[main] CI monitor complete — all checks passed"
     exit 0
+  elif [[ "$total_count" -eq 0 ]]; then
+    echo ""
+    echo "[main] ERROR: No CI checks found — possible API failure or token expiry" >&2
+    echo "[main] This should not happen. The poll loop guards against empty results."
+    exit 1
   fi
 
   # Phase 2: Collect failure artifacts
